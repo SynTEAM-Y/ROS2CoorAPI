@@ -1,0 +1,38 @@
+"/controller_manager":
+  ros__parameters:
+    update_rate: 100
+
+    # -- Register controllers (types) --
+    joint_state_broadcaster:
+      type: joint_state_broadcaster/JointStateBroadcaster
+
+    arm_group_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
+      # -- Per-controller params MUST be here (under controller_manager) --
+      joints: [arm_joint1, arm_joint2, arm_joint3, arm_joint4, arm_joint5]
+      command_interfaces: [position]
+      state_interfaces: [position, velocity]
+      state_publish_rate: 50
+      action_monitor_rate: 20
+      allow_partial_joints_goal: true
+      constraints:
+        goal_time: 0.0
+        stopped_velocity_tolerance: 0.02
+        arm_joint1: {goal: 0.1}
+        arm_joint2: {goal: 0.1}
+        arm_joint3: {goal: 0.1}
+        arm_joint4: {goal: 0.1}
+        arm_joint5: {goal: 0.1}
+
+    gripper_group_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
+      joints: [grip_joint]
+      command_interfaces: [position]
+      state_interfaces: [position, velocity]
+      state_publish_rate: 50
+      action_monitor_rate: 20
+      allow_partial_joints_goal: true
+      constraints:
+        goal_time: 0.0
+        stopped_velocity_tolerance: 0.02
+        grip_joint: {goal: 0.05}

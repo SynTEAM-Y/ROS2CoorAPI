@@ -1,0 +1,22 @@
+# Ignore all .log files
+*.log
+AgentHub
+logs
+log
+build
+install
+
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+.eggs/
+
+
+# Editors
+.vscode/
+.idea/

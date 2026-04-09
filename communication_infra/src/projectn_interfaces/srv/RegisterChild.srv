@@ -1,0 +1,8 @@
+string child_name
+uint16 capacity_hint
+---
+bool accepted
+string reason
+uint16 current_children
+bool parent_is_root
+

@@ -1,0 +1,25 @@
+# One-file scenario: commands + program
+# This robot sends "Summon" then "terminate"
+
+commands:
+  announce: |
+    echo "[{robot}] sending Summon to all workers..."
+  announce2: |
+    echo "[{robot}] sending Rescue! to all workers..."
+  end: |
+    echo "[{robot}] mission done, terminating now." && sleep 1 && echo "[{robot}] terminated. && ^C
+"
+
+> Rescue
+      Rescue!
+      terminate
+      commands to execute:
+          announce2
+          end
+
+> Start
+      Start!
+      terminate
+      commands to execute:
+          announce2
+          end

@@ -1,0 +1,24 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>projectn</name>
+  <version>0.1.0</version>
+  <description>ProjectN tree node (services upstream, topics downstream) + agent + viz hub.</description>
+  <maintainer email="Othmanobi96@gmail.com">Othman Belal</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <!-- Core runtime -->
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>projectn_interfaces</exec_depend>
+
+  <!-- Viz hub runtime via rosdep/apt (no pip) -->
+  <exec_depend>python3-fastapi</exec_depend>
+  <exec_depend>python3-uvicorn</exec_depend>
+  <exec_depend>python3-pydantic</exec_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
+

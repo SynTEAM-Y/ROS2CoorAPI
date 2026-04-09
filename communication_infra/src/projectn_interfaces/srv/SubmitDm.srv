@@ -1,0 +1,8 @@
+# Agent submits data upstream (child -> parent -> ... -> root)
+uint64 msg_id
+string src_agent
+string payload_json
+---
+bool ok
+string reason
+

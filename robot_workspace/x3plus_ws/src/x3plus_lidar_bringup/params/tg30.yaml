@@ -1,0 +1,32 @@
+ydlidar:
+  ros__parameters:
+    lidar_type: 0
+    device_type: 0
+    port: /dev/ttyUSB0   # or /dev/ttyUSB1, depending on where it appears
+    baudrate: 512000
+    frame_id: laser_link
+    frequency: 10.0
+    sample_rate: 9
+    fixed_resolution: true
+    invalid_range_is_inf: true
+    intensity: false
+    ignore_array: ""
+
+    # FOV / ranges (needed by driver)
+    angle_min: -90.0
+    angle_max: 90.0
+    range_min: 0.05
+    range_max: 30.0
+
+    # The rest that the driver requires
+    abnormal_check_count: 4
+    intensity_bit: 8
+    reversion: true
+    inverted: false
+    auto_reconnect: true
+    isSingleChannel: false
+    support_motor_dtr: true
+    debug: false
+    m1_mode: 0
+    m2_mode: 0
+    m3_mode: 0

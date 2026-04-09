@@ -1,0 +1,17 @@
+repositories:
+  OrbbecSDK_ROS2:
+    type: git
+    url: https://github.com/orbbec/OrbbecSDK_ROS2.git
+    version: bd5c225338efa6b1e3eb604e820b0cdb456061f7
+  ros2_astra_camera:
+    type: git
+    url: https://github.com/orbbec/ros2_astra_camera.git
+    version: f7e71d9ce806e788cb48d8580aac2c778fba4214
+  ydlidar_ros2_driver:
+    type: git
+    url: https://github.com/YDLIDAR/ydlidar_ros2_driver.git
+    version: 4ef70d3f32a85704ade0be54b214f3763b1ab3e8
+  ydlidar_sdk:
+    type: git
+    url: https://github.com/YDLIDAR/YDLidar-SDK.git
+    version: baac54763c3aa540347e3dd3367d6745eca39a3b

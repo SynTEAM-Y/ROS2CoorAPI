@@ -1,0 +1,30 @@
+# ProjectN • Robot Command Map
+# Each entry defines:
+#   <name>: <shell command to execute>
+# Placeholders:
+#   {robot} → current robot name (e.g., R1)
+#   {base}  → /{robot}/cmd_vel (e.g., /R1/cmd_vel)
+
+forward:  >
+  timeout 5 ros2 topic pub -r 20 {base} geometry_msgs/Twist
+  "{linear: {x: 0.1}, angular: {z: 0.0}}" > /dev/null 2>&1
+
+backwards: >
+  timeout 5 ros2 topic pub -r 20 {base} geometry_msgs/Twist
+  "{linear: {x: -0.1}, angular: {z: 0.0}}" > /dev/null 2>&1
+
+turn right: >
+  timeout 5 ros2 topic pub -r 20 {base} geometry_msgs/Twist
+  "{linear: {x: 0.1}, angular: {z: -0.2}}" > /dev/null 2>&1
+
+turn left: >
+  timeout 5 ros2 topic pub -r 20 {base} geometry_msgs/Twist
+  "{linear: {x: 0.1}, angular: {z: 0.2}}" > /dev/null 2>&1
+
+stop: >
+  timeout 5 ros2 topic pub -r 20 {base} geometry_msgs/Twist
+  "{linear: {x: 0.0}, angular: {z: 0.0}}" > /dev/null 2>&1
+
+# Diagnostic / general-purpose commands
+ros2 topic list: ros2 topic list
+echo hello: echo "👋 Hello from {robot}"

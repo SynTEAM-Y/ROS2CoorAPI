@@ -1,0 +1,27 @@
+commands:
+  get_coords_file: |
+    ros2 run scenarios get_coords --ros-args -p robot:={robot} | tr -d '\n' | tee /tmp/{robot}_coords.txt >/dev/null
+
+  format_rescue_msg: |
+    bash -lc 'COORDS=$(cat /tmp/{robot}_coords.txt); echo "Rescue $COORDS!" > /tmp/{robot}_rescue_msg.txt'
+
+  # Use RobotNode to send the message UP – this uses the attached agent's topic
+  # and goes through list sent + ack pipeline.
+  send_rescue_msg: |
+    send_up_file:/tmp/{robot}_rescue_msg.txt
+
+  exit_self: |
+    echo "[{robot}] terminating now"
+  
+  Hard_exit: |
+     kill -TERM $$  # exits the shell running the node; may or may not close the terminal window
+
+>idle
+    commands to execute:
+      get_coords_file
+      format_rescue_msg
+      send_rescue_msg
+      exit_self
+      Hard_exit
++
+    (none)

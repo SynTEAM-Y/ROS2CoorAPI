@@ -1,0 +1,10 @@
+# Agent asks for an ID (root gates turn-taking and grants 1,2,3,...)
+string agent_name
+string path_json
+uint32 timeout_ms_remaining
+---
+bool ok
+string reason
+uint64 msg_id
+string path_json_return
+

@@ -1,0 +1,14 @@
+{
+  "obsidian-plugin-toc:create-toc": [
+    {
+      "modifiers": [],
+      "key": "F4"
+    }
+  ],
+  "obsidian-plugin-toc:create-toc-next-level": [
+    {
+      "modifiers": [],
+      "key": "F5"
+    }
+  ]
+}

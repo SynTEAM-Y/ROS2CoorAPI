@@ -1,0 +1,821 @@
+#!/usr/bin/env python3
+# ProjectN • Tree Server Node (STRICT Q/R/D, all D go through PQ; hop-by-hop src inference)
+
+
+# INTRODUCTION 
+# ───────────────────────────────────────────────────────────────────────
+# This file implements a ROS 2 node that sits inside a ProjectN message tree.
+# Each node can be a root or a child. It communicates with:
+#   • Its parent node (if it has one).
+#   • Its child nodes (zero or more).
+#   • Local agents attached to the node.
+#
+# Messages come in three logical kinds:
+#   Q — “Question / Request for an id” (agents ask for a new message id)
+#   R — “Reply with an id” (root grants an id and routes it back)
+#   D — “Data” (payloads carrying the actual content, strictly ordered by id)
+#
+# The node runs a strict 3-thread pipeline (implemented in processor.py):
+#   T1 — merges everything it receives (control work + R + D) into an input FIFO.
+#   T2 — diverts only D messages into a waiting priority queue (ordered by id).
+#   T3 — delivers D only when its id == expected_id (global order per tree),
+#         otherwise it processes non-D (Q/R) from the FIFO head.
+#
+# IMPORTANT behavior you asked for and this node enforces:
+#   • ALL D (regardless of up/down direction) must pass through the pipeline and
+#     are delivered strictly by ascending id.
+#   • The node does NOT trust any pre-labeled direction. Instead, it infers
+#     direction hop-by-hop by checking the "src" field in D.payload_json:
+#       - if "src" is a child or a local agent → the D came from BELOW
+#       - if "src" equals parent name           → the D came from ABOVE
+#   • When a D arrives from BELOW:
+#       1) deliver locally to all agents except the original sender,
+#       2) broadcast it DOWN to all other children,
+#       3) forward it UP to the parent (if there is one).
+#   • When a D arrives from ABOVE:
+#       1) deliver locally to all agents,
+#       2) broadcast it DOWN to ALL children.
+#   • Before forwarding to the next hop, the node rewrites payload["src"] so that
+#     the next hop always sees who sent it (this node’s name), while keeping
+#     DataMsg.src_agent intact to remember the original originating agent for
+#     local echo suppression.
+#
+# Services & topics:
+#   • Services (this node provides):
+#       - /<name>/register_child   : children call to attach; parent creates pubs
+#       - /<name>/get_msg_id       : upward Q; root grants and R returns via topics
+#       - /<name>/submit_dm        : agents submit D; node enqueues into pipeline
+#   • Topics (this node publishes/subscribes):
+#       - Per-child DOWN D and R topics (parent→child)
+#       - Per-agent inbox/reply topics (node→agent, agent→node handled elsewhere)
+#
+# Visual telemetry:
+#   • The node periodically publishes a JSON status snapshot for UI/telemetry.
+#
+# Notes:
+#   • “WorkItem” enqueued to the pipeline is control work (e.g., GET_MSG_ID).
+#   • All actual D traffic flows through pipeline’s ingress → ordered delivery.
+#   • The root tracks and grants monotonically increasing ids.
+"""
+This node sits in a ProjectN tree (root/children). It implements:
+
+• Services: register_child, get_msg_id, submit_dm
+• Topics: per-child downlinks for D and R; per-agent inbox/reply
+• A 3-thread Pipeline (processor.py) that:
+  - merges inputs (CTRL + D + R),
+  - places ALL D in a waiting PQ by id,
+  - delivers only when id == expected_id (global order),
+  - lets the node handle hop-by-hop logic in _pipeline_handle_data.
+
+New behavior you requested:
+• ALL D (up or down) are fed to the pipeline and strictly ordered by id.
+• T3 determines direction by comparing D.json["src"] to this node’s
+  - children set,
+  - parent name,
+  - local agents set.
+  No explicit “dir” tags are required.
+• If a D came from below (agent or child): deliver locally, broadcast to other children, then forward UP to the parent via submit_dm.
+• If a D came from above (parent): deliver locally, broadcast to ALL children.
+• On each hop, we rewrite payload_json["src"] := self.name before forwarding, but keep DataMsg.src_agent as the original origin agent so we can skip echo.
+"""
+
+from __future__ import annotations
+
+import json
+import time
+import queue
+from typing import Dict, List, Any, Optional
+
+import rclpy
+from rclpy.node import Node
+from rclpy.executors import MultiThreadedExecutor
+from rclpy.callback_groups import (
+    MutuallyExclusiveCallbackGroup,
+    ReentrantCallbackGroup
+)
+from rclpy.task import Future
+from rclpy.exceptions import ParameterAlreadyDeclaredException
+
+from projectn_interfaces.srv import RegisterChild, GetMsgId, SubmitDm
+from projectn_interfaces.msg import DataMsg, RMsg
+
+from .processor import Pipeline               # ← pipeline with T1/T2/T3 threads
+from .queues import CtrlWork as WorkItem, CtrlKind  # ← control work items/kinds
+
+from std_msgs.msg import String as RosString
+
+# Optional per-node file logger (your logging_utils). If missing, we fallback.
+try:
+    from .logging_utils import get_node_logger
+except Exception:  # safe fallback if helper missing
+    get_node_logger = None
+
+# Pretty logging helpers
+try:
+    from ..utils_emojis import elog, TAG
+except Exception:
+    # Fallback if emoji helper isn't available; keep symbols readable
+    def elog(*args, **kwargs):
+        return " ".join(str(a) for a in args)
+    class TAG:
+        OK="✅"; WARN="⚠️"; T3="🚦"; CAST="📣"; GRANT="🎟️"
+        Q_UP="🟦"; R_IN="🟨"; R_OUT="🟨"; D_IN="📥"; D_UP="⬆️"; D_DOWN="⬇️"
+
+# ───────────────────────────────────────────────────────────────────────
+# Helpers for strict JSON shapes + canonical dumps
+# ───────────────────────────────────────────────────────────────────────
+
+def _as_obj(raw: str) -> dict:
+    try:
+        v = json.loads(raw) if raw else {}
+        return v if isinstance(v, dict) else {}
+    except Exception:
+        return {}
+
+def _require(cond: bool, err: str):
+    if not cond:
+        raise ValueError(err)
+
+def _jdump(obj: dict, kind: str = "") -> str:
+    if not isinstance(obj, dict):
+        return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
+    order_map = {
+        "Q": ["Q", "id", "dest", "route", "msg", "src"],
+        "R": ["R", "id", "dest", "route"],
+        "D": ["D", "id", "dest", "src", "msg"],
+    }
+    order = order_map.get(kind, [])
+    if order:
+        out = {k: obj[k] for k in order if k in obj}
+        for k in sorted(obj.keys()):
+            if k not in out:
+                out[k] = obj[k]
+    else:
+        out = obj
+    return json.dumps(out, ensure_ascii=False, separators=(",", ":"))
+
+def parse_Q2(path_json_str: str) -> dict:
+    q = _as_obj(path_json_str)
+    _require(isinstance(q, dict) and q.get("Q") is True, "ERR:Q_BAD_FORMAT")
+    route = q.get("route"); dest = q.get("dest")
+    _require(isinstance(route, list) and all(isinstance(x, str) and x for x in route), "ERR:Q_BAD_FORMAT")
+    _require(isinstance(dest, str) and dest != "", "ERR:Q_BAD_FORMAT")
+    return q
+
+def make_R2_at_root(msg_id: int, full_up_route: List[str]) -> dict:
+    _require(isinstance(full_up_route, list) and len(full_up_route) >= 1, "ERR:R_ROUTE_EMPTY")
+    if len(full_up_route) == 1:
+        return {"R": True, "id": int(msg_id), "route": [], "dest": str(full_up_route[0])}
+    dest = str(full_up_route[-1])
+    back_route = list(full_up_route[:-1])
+    return {"R": True, "id": int(msg_id), "route": back_route, "dest": dest}
+
+def step_R2_next_hop(r_json: str) -> dict:
+    r = _as_obj(r_json)
+    _require(r.get("R") is True and "id" in r and isinstance(r.get("route"), list) and isinstance(r.get("dest"), str), "ERR:R_BAD")
+    route = list(r.get("route", []))
+    if route:
+        next_dest = str(route[-1])
+        r["route"] = route[:-1]
+        r["dest"] = next_dest
+    return r
+
+def parse_D2(payload_json_str: str) -> dict:
+    d = _as_obj(payload_json_str)
+    _require(d.get("D") is True, "ERR:D_BAD_FORMAT")
+    _require(isinstance(d.get("id"), int) and d["id"] > 0, "ERR:D_BAD_ID")
+    _require(isinstance(d.get("src"), str) and d["src"], "ERR:D_BAD_SRC")
+    _require(isinstance(d.get("dest"), str) and d["dest"], "ERR:D_BAD_DEST")
+    _require("msg" in d, "ERR:D_BAD_MSG")
+    return d
+
+def to_public_D_json(msg_id: int, src: str, dest: str, msg_obj: Any) -> str:
+    obj = {"D": True, "id": int(msg_id), "dest": str(dest), "src": str(src), "msg": msg_obj}
+    return _jdump(obj, "D")
+
+# ───────────────────────────────────────────────────────────────────────
+# The main class
+# ───────────────────────────────────────────────────────────────────────
+
+class TreeNode(Node):
+    # ------------- Attribute annotations (documentation) ----------------
+    name: str
+    is_root: bool
+    parent: str
+    up_timeout_ms: int
+    hop_timeout_ms: int
+
+    children: List[str]
+    down_pubs: Dict[str, Any]
+    down_reply_pubs: Dict[str, Any]
+    parent_sub: Optional[Any]
+    parent_reply_sub: Optional[Any]
+
+    local_agents: set[str]
+    agent_pubs: Dict[str, Any]
+    agent_reply_pubs: Dict[str, Any]
+    _agent_attach_sub: Any
+    _agent_detach_sub: Any
+
+    _next_id: int
+    _grants: Dict[int, str]
+    _used_ids: set[int]
+
+    _parent_getid_cli: Optional[Any]
+    _parent_submit_cli: Optional[Any]
+    _inflight_getid: Dict[int, Future]
+    _inflight_submit: Dict[int, Future]
+
+    ctrl_group: MutuallyExclusiveCallbackGroup
+    get_group: MutuallyExclusiveCallbackGroup
+    submit_group: MutuallyExclusiveCallbackGroup
+    data_group: ReentrantCallbackGroup
+
+    _srv_register: Any
+    _srv_getid: Any
+    _srv_submit: Any
+
+    ctrl_q: queue.Queue
+    in_q: queue.Queue
+    pipe: Pipeline
+
+    _register_timer: Optional[Any]
+    _register_attempts: int
+    _register_inflight: bool
+    _register_done: bool
+
+    _viz_pub: Any
+    _viz_timer: Any
+
+    # ----------------- constructor -------------------------------------
+    def __init__(self, parameter_overrides=None):
+        super().__init__(
+            'projectn_server',
+            parameter_overrides=parameter_overrides,
+            automatically_declare_parameters_from_overrides=True
+        )
+
+        # Parameters
+        self._declare('name', '')
+        self._declare('is_root', False)
+        self._declare('parent', '')
+        self._declare('up_timeout_ms', 15000)
+        self._declare('hop_timeout_ms', 200)
+
+        # Read parameters
+        self.name = self.get_parameter('name').get_parameter_value().string_value
+        if not self.name:
+            raise RuntimeError("param 'name' is required")
+
+        self.is_root = self.get_parameter('is_root').get_parameter_value().bool_value
+        self.parent = self.get_parameter('parent').get_parameter_value().string_value
+
+        # Optional per-node file logger
+        if get_node_logger:
+            self.log = get_node_logger(self.name)
+            self._log_info  = lambda m: self.log.info(m)
+            self._log_debug = lambda m: self.log.debug(m)
+            self._log_warn  = lambda m: self.log.warning(m)
+            self._log_err   = lambda m: self.log.error(m)
+        else:
+            # Fallback: use ROS logger
+            self._log_info  = lambda m: self.get_logger().info(m)
+            self._log_debug = lambda m: self.get_logger().debug(m)
+            self._log_warn  = lambda m: self.get_logger().warn(m)
+            self._log_err   = lambda m: self.get_logger().error(m)
+
+        self.up_timeout_ms = int(self.get_parameter('up_timeout_ms').get_parameter_value().integer_value or 3000)
+        self.hop_timeout_ms = int(self.get_parameter('hop_timeout_ms').get_parameter_value().integer_value or 200)
+
+        # Topology bookkeeping
+        self.children = []
+        self.down_pubs = {}
+        self.down_reply_pubs = {}
+        self.parent_sub = None
+        self.parent_reply_sub = None
+
+        # Local agents lifecycle
+        self.local_agents = set()
+        self.agent_pubs = {}
+        self.agent_reply_pubs = {}
+        self._agent_attach_sub = self.create_subscription(
+            RosString, f'/{self.name}/agents/attach', self._on_agent_attach, 10
+        )
+        self._agent_detach_sub = self.create_subscription(
+            RosString, f'/{self.name}/agents/detach', self._on_agent_detach, 10
+        )
+
+        # Root id grant state
+        self._next_id = 1
+        self._grants = {}
+        self._used_ids = set()
+
+        # Lazy upstream clients
+        self._parent_getid_cli = None
+        self._parent_submit_cli = None
+        self._inflight_getid = {}
+        self._inflight_submit = {}
+
+        # Callback groups
+        self.ctrl_group = MutuallyExclusiveCallbackGroup()
+        self.get_group = MutuallyExclusiveCallbackGroup()
+        self.submit_group = MutuallyExclusiveCallbackGroup()
+        self.data_group = ReentrantCallbackGroup()
+
+        # Services
+        self._srv_register = self.create_service(
+            RegisterChild, f'/{self.name}/register_child', self._on_register_child,
+            callback_group=self.ctrl_group
+        )
+        self._srv_getid = self.create_service(
+            GetMsgId, f'/{self.name}/get_msg_id', self._on_get_msg_id,
+            callback_group=self.get_group
+        )
+        self._srv_submit = self.create_service(
+            SubmitDm, f'/{self.name}/submit_dm', self._on_submit_dm,
+            callback_group=self.submit_group
+        )
+
+        # Pipeline
+        self.ctrl_q = queue.Queue(maxsize=256)
+        self.in_q = queue.Queue(maxsize=256)
+        self.pipe = Pipeline(self, self.ctrl_q, self.in_q)
+
+        self.get_logger().info(elog('🌳', f"{self.name}: started (root={self.is_root}, parent='{self.parent}')"))
+        self.get_logger().info(elog('🧵', f"{self.name}: pipeline threads up"))
+
+        # Child auto-register loop
+        self._register_timer = None
+        self._register_attempts = 0
+        self._register_inflight = False
+        self._register_done = False
+        if not self.is_root and self.parent:
+            self._register_timer = self.create_timer(0.5, self._register_tick, callback_group=self.ctrl_group)
+
+        # Viz heartbeat
+        self._viz_pub = self.create_publisher(RosString, f'/{self.name}/viz/status', 10)
+        self._viz_timer = self.create_timer(0.5, self._viz_tick)
+
+        self.get_logger().info(elog(TAG.OK, f"{self.name}: node ready (root={self.is_root}, parent='{self.parent}')"))
+        # 🔎 Topology snapshot at START
+        self._log_topology("START")
+
+    # ----------------- topology snapshot (to log file) -----------------
+    def _log_topology(self, stage: str = "TOPO"):
+        """Log a compact topology snapshot to the node's log (file or ROS)."""
+        try:
+            queues = self.pipe.snapshot_status() if hasattr(self, "pipe") else {}
+        except Exception:
+            queues = {}
+        info = {
+            "name": self.name,
+            "is_root": bool(self.is_root),
+            "parent": self.parent or None,
+            "children": sorted(self.children),
+            "local_agents": sorted(self.local_agents),
+            "expected_id": queues.get("expected_id"),
+            "next_id": int(self._next_id) if self.is_root else None,
+        }
+        self._log_info(elog('🗺️', f"{self.name}: {stage} " + _jdump(info)))
+
+    # ----------------- telemetry ---------------------------------------
+    def _viz_tick(self):
+        try:
+            queues = self.pipe.snapshot_status() if hasattr(self.pipe, "snapshot_status") else {}
+            payload = {
+                "name": self.name,
+                "is_root": bool(self.is_root),
+                "next_id": int(self._next_id) if self.is_root else None,
+                "queues": queues,
+                "local_agents": sorted(self.local_agents),
+            }
+            self._viz_pub.publish(RosString(data=json.dumps(payload, separators=(",", ":"))))
+        except Exception as e:
+            self.get_logger().warn(elog(TAG.WARN, f"{self.name}: viz tick failed: {e}"))
+
+    def _declare(self, name, default):
+        try:
+            self.declare_parameter(name, default)
+        except ParameterAlreadyDeclaredException:
+            pass
+
+    @staticmethod
+    def _poll_future(fut: Future, timeout_s: float) -> bool:
+        end = time.monotonic() + timeout_s
+        while time.monotonic() < end and rclpy.ok():
+            if fut.done():
+                return True
+            time.sleep(0.005)
+        return fut.done()
+
+    # ----------------- agent lifecycle ---------------------------------
+    def _on_agent_attach(self, msg: RosString):
+        try:
+            agent = (msg.data or "").strip()
+            if not agent or agent in self.local_agents:
+                return
+            self.local_agents.add(agent)
+            dtopic = f'/{self.name}/agents/{agent}/inbox'
+            rtopic = f'/{self.name}/agents/{agent}/reply'
+            self.agent_pubs[agent] = self.create_publisher(DataMsg, dtopic, 10)
+            self.agent_reply_pubs[agent] = self.create_publisher(RMsg, rtopic, 10)
+            self.get_logger().info(elog('👤', f"{self.name}: agent attached {agent} -> {dtopic} & {rtopic}"))
+            # 🔎 Snapshot after attach
+            self._log_topology("AGENT_ATTACH")
+        except Exception as e:
+            self.get_logger().warn(elog(TAG.WARN, f"{self.name}: attach failed: {e}"))
+
+    def _on_agent_detach(self, msg: RosString):
+        try:
+            agent = (msg.data or "").strip()
+            if not agent:
+                return
+            if agent in self.local_agents:
+                self.local_agents.remove(agent)
+                self.agent_pubs.pop(agent, None)
+                self.agent_reply_pubs.pop(agent, None)
+                self.get_logger().info(elog('👋', f"{self.name}: agent detached {agent}"))
+                # 🔎 Snapshot after detach
+                self._log_topology("AGENT_DETACH")
+        except Exception as e:
+            self.get_logger().warn(elog(TAG.WARN, f"{self.name}: detach failed: {e}"))
+
+    # ----------------- child register with parent ----------------------
+    def _register_tick(self):
+        if self._register_done or self._register_inflight:
+            return
+        svc = f'/{self.parent}/register_child'
+        cli = self.create_client(RegisterChild, svc)
+        self._register_attempts += 1
+        if not cli.wait_for_service(timeout_sec=0.2):
+            self.get_logger().warn(elog('⏳', f"{self.name}: parent {svc} unavailable (try {self._register_attempts})"))
+            return
+        req = RegisterChild.Request()
+        req.child_name = self.name
+        req.capacity_hint = 0
+        self._register_inflight = True
+        fut = cli.call_async(req)
+
+        def _done_cb(f):
+            self._register_inflight = False
+            if f.cancelled() or f.exception() is not None:
+                self.get_logger().warn(elog('⚠️', f"{self.name}: register_child failed"))
+                return
+            res = f.result()
+            if res and getattr(res, 'accepted', False):
+                dtopic = f'/{self.parent}/down/{self.name}/dm'
+                if self.parent_sub is None:
+                    self.parent_sub = self.create_subscription(DataMsg, dtopic, self._on_down_dm_cb, 10)
+                    self.get_logger().info(elog('🤝', f"{self.name}: subscribed {dtopic}"))
+                rtopic = f'/{self.parent}/down/{self.name}/reply'
+                if self.parent_reply_sub is None:
+                    self.parent_reply_sub = self.create_subscription(RMsg, rtopic, self._on_down_r_cb, 10)
+                    self.get_logger().info(elog('🤝', f"{self.name}: subscribed {rtopic}"))
+                try:
+                    last_id = getattr(res, 'last_id', None)
+                    if isinstance(last_id, int) and last_id > 0 and hasattr(self.pipe, "set_expected_start"):
+                        self.pipe.set_expected_start(last_id + 1)
+                        self.get_logger().info(elog('🔢', f"{self.name}: seed expected_id={last_id+1} from parent"))
+                except Exception:
+                    pass
+                self._register_done = True
+                if self._register_timer:
+                    self._register_timer.cancel()
+                self.get_logger().info(elog('✅', f"{self.name}: attached to {self.parent} ({getattr(res, 'reason', 'OK')})"))
+                # 🔎 Snapshot when child finished attaching to its parent
+                self._log_topology("ATTACHED_TO_PARENT")
+            else:
+                self.get_logger().warn(elog('🚫', f"{self.name}: parent rejected ({getattr(res, 'reason', '?')})"))
+
+        fut.add_done_callback(_done_cb)
+
+    # ----------------- parent handles register_child --------------------
+    def _on_register_child(self, req, resp):
+        child = req.child_name
+        if child in self.children:
+            resp.accepted = True; resp.reason = 'ALREADY_ATTACHED'
+        else:
+            self.children.append(child)
+            dtopic = f'/{self.name}/down/{child}/dm'
+            rtopic = f'/{self.name}/down/{child}/reply'
+            self.down_pubs[child] = self.create_publisher(DataMsg, dtopic, 10)
+            self.down_reply_pubs[child] = self.create_publisher(RMsg, rtopic, 10)
+            resp.accepted = True; resp.reason = 'OK'
+            # 🔎 Snapshot on parent when a child registers
+            self._log_topology(f"CHILD_REGISTERED:{child}")
+        try:
+            last_id = self._next_id - 1 if self.is_root and self._next_id > 1 else 0
+            resp.last_id = int(last_id)
+        except Exception:
+            pass
+        return resp
+
+    # ----------------- GET_MSG_ID (Q → R down via topics) ---------------
+    def _on_get_msg_id(self, req: GetMsgId.Request, resp: GetMsgId.Response):
+        fut = Future()
+        try:
+            self.pipe.enqueue_ctrl(WorkItem(kind=CtrlKind.GET_MSG_ID, payload=(req, fut)))
+        except Exception:
+            resp.ok = False; resp.reason = 'ERR:CTRL_ENQUEUE_FAILED'; resp.msg_id = 0
+            return resp
+
+        budget_ms = req.timeout_ms_remaining if req.timeout_ms_remaining > 0 else self.up_timeout_ms
+        ok = self._poll_future(fut, budget_ms / 1000.0)
+        if not ok or fut.exception() is not None:
+            resp.ok = False; resp.reason = 'ERR:TIMEOUT'; resp.msg_id = 0
+            return resp
+        r = fut.result()
+        resp.ok = r['ok']; resp.reason = r['reason']; resp.msg_id = 0
+        return resp
+
+    def _handle_get_msg_id_work(self, payload):
+        req, fut = payload
+        try:
+            q = parse_Q2(req.path_json)
+        except ValueError as e:
+            fut.set_result({'ok': False, 'reason': str(e), 'msg_id': 0})
+            return
+
+        agent_name = getattr(req, "agent_name", "") or (q["route"][0] if q["route"] else "")
+
+        if not self.is_root:
+            if not self.parent:
+                fut.set_result({'ok': False, 'reason': 'ERR:NO_PARENT', 'msg_id': 0}); return
+            if self._parent_getid_cli is None:
+                self._parent_getid_cli = self.create_client(GetMsgId, f'/{self.parent}/get_msg_id')
+
+            hop_s = max(self.hop_timeout_ms, 200) / 1000.0
+            if not self._parent_getid_cli.wait_for_service(timeout_sec=hop_s):
+                self.pipe.enqueue_ctrl(WorkItem(kind=CtrlKind.GET_MSG_ID, payload=(req, fut)))
+                return
+
+            fwd_q = {
+                "Q": True,
+                "route": list(q["route"]) + ([self.name] if (not q["route"] or q["route"][-1] != self.name) else []),
+                "dest": self.parent,
+            }
+
+            key = id(fut)
+            ufut = self._inflight_getid.get(key)
+            if ufut is None:
+                up = GetMsgId.Request()
+                up.agent_name = agent_name
+                up.path_json = _jdump(fwd_q, "Q")
+                up.timeout_ms_remaining = req.timeout_ms_remaining
+                self.get_logger().info(elog(TAG.Q_UP, f"{self.name}: Q -> {self.parent} {up.path_json}"))
+                ufut = self._parent_getid_cli.call_async(up)
+                self._inflight_getid[key] = ufut
+
+            deadline = time.monotonic() + hop_s
+            while time.monotonic() < deadline and rclpy.ok():
+                if ufut.done():
+                    break
+                time.sleep(0.005)
+            if not ufut.done():
+                self.pipe.enqueue_ctrl(WorkItem(kind=CtrlKind.GET_MSG_ID, payload=(req, fut))); return
+            self._inflight_getid.pop(key, None)
+            if ufut.exception() is not None:
+                fut.set_result({'ok': False, 'reason': 'ERR:PARENT_TIMEOUT', 'msg_id': 0}); return
+            uresp = ufut.result()
+            if not uresp.ok:
+                fut.set_result({'ok': False, 'reason': uresp.reason or 'ERR:UPSTREAM_FAILED', 'msg_id': 0}); return
+
+            try:
+                _ = step_R2_next_hop(uresp.reason or "{}")
+            except Exception:
+                pass
+            self.get_logger().info(elog(TAG.R_OUT, f"{self.name}: R will arrive via topics (per-hop)"))
+            fut.set_result({'ok': True, 'reason': 'R_VIA_TOPIC', 'msg_id': 0})
+            return
+
+        # ROOT
+        full_up_route = list(q["route"])
+        msg_id = self._next_id
+        self._next_id += 1
+        self._grants[msg_id] = agent_name or "?"
+
+        r = make_R2_at_root(msg_id, full_up_route)
+        r_json = _jdump(r, "R")
+        self.get_logger().info(elog(TAG.GRANT, f"{self.name}: GRANT id={msg_id} up_route={full_up_route} R={r_json}"))
+
+        dest = r.get("dest", "")
+        if dest in self.down_reply_pubs:
+            out = RMsg(); out.msg_id = msg_id; out.payload_json = r_json
+            out.path_json = _jdump({"down": ["R"], "to_children": [dest]})
+            try:
+                self.down_reply_pubs[dest].publish(out)
+            except Exception as e:
+                self.get_logger().warn(elog(TAG.WARN, f"R→{dest}: publish failed id={msg_id}: {e}"))
+        elif dest in self.agent_reply_pubs:
+            out = RMsg(); out.msg_id = msg_id; out.payload_json = r_json
+            out.path_json = _jdump({"down": ["R"], "to_children": []})
+            try:
+                self.agent_reply_pubs[dest].publish(out)
+            except Exception as e:
+                self.get_logger().warn(elog(TAG.WARN, f"{self.name}: publish R to agent failed: {e}"))
+        else:
+            self.get_logger().warn(elog(TAG.WARN, f"{self.name}: R dest '{dest}' not a child/agent — dropped"))
+
+        fut.set_result({'ok': True, 'reason': 'R_PUBLISHED', 'msg_id': 0})
+
+    # ----------------- SUBMIT_DM (agents call this; we enqueue D) -------
+    def _on_submit_dm(self, req: SubmitDm.Request, resp: SubmitDm.Response):
+        fut = Future()
+        try:
+            self.pipe.enqueue_ctrl(WorkItem(kind=CtrlKind.SUBMIT_DM, payload=(req, fut)))
+        except Exception:
+            resp.ok = False; resp.reason = 'ERR:CTRL_ENQUEUE_FAILED'
+            return resp
+
+        ok = self._poll_future(fut, self.up_timeout_ms / 1000.0)
+        if not ok or fut.exception() is not None:
+            resp.ok = False; resp.reason = 'ERR:TIMEOUT'
+            return resp
+        r = fut.result()
+        resp.ok = r['ok']; resp.reason = r['reason']
+        return resp
+
+    def _handle_submit_dm_work(self, payload):
+        req, fut = payload
+        try:
+            dup = parse_D2(req.payload_json)
+        except ValueError as e:
+            fut.set_result({'ok': False, 'reason': str(e)})
+            return
+
+        if self.is_root:
+            dm_id = int(dup.get("id"))
+            if not (1 <= dm_id <= (self._next_id - 1 if self._next_id > 1 else 0) or dm_id == self._next_id):
+                pass
+
+        dm = DataMsg()
+        dm.msg_id = int(dup["id"])
+        dm.src_agent = req.src_agent or str(dup.get("src") or "")
+        dm.payload_json = to_public_D_json(dm.msg_id, dup.get("src",""), dup.get("dest",""), dup.get("msg"))
+        dm.path_json = _jdump({"down": [], "to_children": []})
+        try:
+            self.pipe.enqueue_dm_in(dm)
+        except Exception:
+            fut.set_result({'ok': False, 'reason': 'ERR:ENQUEUE_FAILED'}); return
+
+        fut.set_result({'ok': True, 'reason': 'ENQUEUED'}); return
+
+    # ----------------- downlink subscriptions --------------------------
+    def _on_down_dm_cb(self, msg: DataMsg):
+        self.pipe.enqueue_dm_in(msg)
+
+    def _on_down_r_cb(self, msg: RMsg):
+        self.pipe.enqueue_dm_in(msg)
+
+    # ----------------- Pipeline entrypoints (T3 will call) --------------
+    def _pipeline_handle_ctrl(self, work: WorkItem):
+        if work.kind in (getattr(CtrlKind, "GET_MSG_ID", CtrlKind), getattr(CtrlKind, "Q_REQUEST_ID", CtrlKind)):
+            self._handle_get_msg_id_work(work.payload)
+        elif work.kind in (getattr(CtrlKind, "SUBMIT_DM", CtrlKind), getattr(CtrlKind, "SUBMIT_DATA", CtrlKind)):
+            self._handle_submit_dm_work(work.payload)
+
+    def _pipeline_handle_reply(self, rm: RMsg):
+        try:
+            r = _as_obj(rm.payload_json)
+        except Exception:
+            r = {}
+        rid = int(r.get("id", rm.msg_id or 0))
+        self.get_logger().info(elog(TAG.R_IN, f"{self.name}: R in {_jdump(r,'R')}"))
+
+        try:
+            r_next = step_R2_next_hop(_jdump(r, "R"))
+        except Exception as e:
+            self.get_logger().warn(elog(TAG.WARN, f"{self.name}: bad R payload id={rid}: {e}")); return
+
+        next_dest = r_next.get("dest", "")
+        r_json_next = _jdump(r_next, "R")
+        if next_dest in self.down_reply_pubs:
+            out = RMsg(); out.msg_id = rid; out.payload_json = r_json_next; out.path_json = rm.path_json or ""
+            try:
+                self.down_reply_pubs[next_dest].publish(out)
+                self.get_logger().info(elog(TAG.R_OUT, f"{self.name}: R out {r_json_next}"))
+                return
+            except Exception as e:
+                self.get_logger().warn(elog(TAG.WARN, f"{self.name}: forward R -> {next_dest} failed id={rid}: {e}")); return
+        if next_dest in self.agent_reply_pubs:
+            out = RMsg(); out.msg_id = rid; out.payload_json = r_json_next; out.path_json = rm.path_json or ""
+            try:
+                self.agent_reply_pubs[next_dest].publish(out)
+                self.get_logger().info(elog(TAG.R_OUT, f"{self.name}: R out {r_json_next}"))
+                return
+            except Exception as e:
+                self.get_logger().warn(elog(TAG.WARN, f"{self.name}: agent reply publish failed id={rid} agent={next_dest}: {e}")); return
+        self.get_logger().warn(elog(TAG.WARN, f"{self.name}: R next hop '{next_dest}' not a child/agent — dropped id={rid}"))
+
+    def _pipeline_handle_data(self, dm: DataMsg):
+        try:
+            payload = json.loads(dm.payload_json) if dm.payload_json else {}
+        except Exception:
+            payload = {}
+        pid = int(getattr(dm, "msg_id", 0))
+        hop_src = str(payload.get("src", "") or "")
+        msg_obj = payload.get("msg")
+        origin_agent = dm.src_agent or ""
+
+        try:
+            p = json.loads(dm.path_json) if dm.path_json else {}
+        except Exception:
+            p = {}
+        self.get_logger().info(elog(TAG.D_IN, f"{self.name}: D in {_jdump(payload,'D')} path={_jdump(p)}"))
+
+        out_local = DataMsg()
+        out_local.msg_id = pid
+        out_local.src_agent = origin_agent
+        out_local.payload_json = dm.payload_json
+        out_local.path_json = _jdump({"down": list(p.get("down", [])), "to_children": list(p.get("to_children", []))})
+        out_local.dst = getattr(dm, 'dst', '')
+        out_local.ttl = getattr(dm, 'ttl', 0)
+        out_local.priority = getattr(dm, 'priority', 0)
+        for agent, pub in list(self.agent_pubs.items()):
+            if agent == origin_agent:
+                continue
+            try:
+                pub.publish(out_local)
+            except Exception as e:
+                self.get_logger().warn(elog(TAG.WARN, f"{self.name}: per-agent inbox publish failed id={pid} agent={agent}: {e}"))
+
+        came_from_child = hop_src in self.children
+        came_from_agent = hop_src in self.local_agents
+        came_from_parent = (self.parent and hop_src == self.parent)
+
+        def _make_child_dm(child: str) -> DataMsg:
+            out = DataMsg()
+            out.msg_id = pid
+            out.src_agent = origin_agent
+            out.payload_json = to_public_D_json(pid, self.name, child, msg_obj)
+            out.path_json = dm.path_json or ""
+            return out
+
+        if came_from_child or came_from_agent or (self.is_root and not came_from_parent):
+            for child, pub in list(self.down_pubs.items()):
+                if came_from_child and child == hop_src:
+                    continue
+                try:
+                    out = _make_child_dm(child)
+                    pub.publish(out)
+                    self.get_logger().info(elog(TAG.D_DOWN, f"{self.name}: D out {out.payload_json}"))
+                except Exception as e:
+                    self.get_logger().warn(elog(TAG.WARN, f"{self.name}: D→{child} publish failed id={pid}: {e}"))
+
+            if self.parent:
+                try:
+                    if self._parent_submit_cli is None:
+                        self._parent_submit_cli = self.create_client(SubmitDm, f'/{self.parent}/submit_dm')
+                    if self._parent_submit_cli.wait_for_service(timeout_sec=0.05):
+                        up_req = SubmitDm.Request()
+                        up_req.msg_id = pid
+                        up_req.src_agent = origin_agent
+                        up_req.payload_json = to_public_D_json(pid, self.name, self.parent, msg_obj)
+                        self.get_logger().info(elog(TAG.D_UP, f"{self.name}: D out {up_req.payload_json}"))
+                        self._parent_submit_cli.call_async(up_req)
+                    else:
+                        self.get_logger().warn(elog(TAG.WARN, f"{self.name}: parent submit_dm unavailable for id={pid}"))
+                except Exception as e:
+                    self.get_logger().warn(elog(TAG.WARN, f"{self.name}: forward UP failed id={pid}: {e}"))
+            return
+
+        if came_from_parent or (not self.parent and hop_src != self.name):
+            for child, pub in list(self.down_pubs.items()):
+                try:
+                    out = _make_child_dm(child)
+                    pub.publish(out)
+                    self.get_logger().info(elog(TAG.D_DOWN, f"{self.name}: D out {out.payload_json}"))
+                except Exception as e:
+                    self.get_logger().warn(elog(TAG.WARN, f"{self.name}: D→{child} publish failed id={pid}: {e}"))
+            return
+
+        self.get_logger().warn(elog(TAG.WARN, f"{self.name}: D id={pid} has ambiguous src='{hop_src}'"))
+
+    # ----------------- helper: root local deliver (legacy) --------------
+    def _deliver_local(self, msg: DataMsg):
+        src = msg.src_agent or ""
+        for agent, pub in list(self.agent_pubs.items()):
+            if agent == src:
+                continue
+            try:
+                pub.publish(msg)
+            except Exception as e:
+                self.get_logger().warn(elog(TAG.WARN, f"{self.name}: local per-agent publish failed id={msg.msg_id} agent={agent}: {e}"))
+
+# ───────────────────────────────────────────────────────────────────────
+# Runner
+# ───────────────────────────────────────────────────────────────────────
+
+def main():
+    rclpy.init()
+    node = TreeNode()
+    try:
+        executor = MultiThreadedExecutor()
+        executor.add_node(node)
+        executor.spin()
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+if __name__ == "__main__":
+    main()

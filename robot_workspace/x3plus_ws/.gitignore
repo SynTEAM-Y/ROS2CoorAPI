@@ -1,0 +1,38 @@
+# ROS 2 colcon artifacts
+build/
+install/
+log/
+.colcon/
+.colcon_install_layout
+
+# Python cruft
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+
+# VSCode / CLion / IDE junk
+.vscode/
+.idea/
+*.iml
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# CMake and caches
+CMakeFiles/
+CMakeCache.txt
+
+# Vendored third-party code
+/src/third_party/**
+!/src/third_party/.keep
+
+# Files/directories labeled as old or backup
+old_*
+backup_*
+
+# Frames generated through "ros2 run tf2_tools view_frames"
+frames_*.gv
+frames_*.pdf

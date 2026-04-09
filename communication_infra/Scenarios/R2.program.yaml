@@ -1,0 +1,38 @@
+commands:
+  # ---- Patrol primitives ----
+  patrol_start: |
+    ros2 service call /{robot}/patrol_enable std_srvs/srv/SetBool "{{data: true}}"
+  patrol_stop: |
+    ros2 service call /{robot}/patrol_enable std_srvs/srv/SetBool "{{data: false}}"
+
+  # ---- Rescue primitives (R1/R2 consume COORDS captured from DOWN by RobotNode) ----
+  set_rescue_coords_and_Go: |
+    ros2 param set /{robot}/patrol_rescue rescue_xy "$COORDS" && ros2 service call /{robot}/patrol_rescue std_srvs/srv/Trigger "{{}}"
+  
+  run_service: |
+    ros2 run scenarios patrol_rescue --ros-args -p robot_ns:={robot}
+
+  # (Optional) tiny log helpers
+  log_idle: |
+    echo "[{robot}] Idle: patrolling..."
+  log_rescue: |
+    echo "[{robot}] Won rescue: COORDS=$COORDS"
+
+>idle
+    commands to execute:
+      run_service
+      log_idle
+      patrol_start
++
+    (none)
+
+>Rescue?
+    propose!
+    commands to execute:
+      patrol_stop
+      set_rescue_coords_and_Go
+      log_rescue
+      trigger_rescue
+  
++
+    propose?
