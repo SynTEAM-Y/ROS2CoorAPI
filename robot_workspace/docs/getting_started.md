@@ -16,8 +16,8 @@ This guide shows how to set up the `x3plus_ws` workspace and access all key robo
 ---
 ## 2. Clone the workspace
 ```bash
-git clone https://github.com/KarimNahas01/ROS2Coordination.git
-cd ~/ROS2Coordination/robot_workspace/x3plus_ws
+git clone git@github.com:SynTEAM-Y/ROS2CoorAPI.git
+cd ~/ROS2CoorAPI/robot_workspace/x3plus_ws
 ```
 
 ## 3. One-command bootstrap (installs deps, pulls camera stack, builds)

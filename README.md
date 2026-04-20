@@ -38,8 +38,8 @@ The structure separates communication layers from robot specific functionality f
 
 ### Clone the repository
 ```bash
-git clone https://github.com/KarimNahas01/ROS2Coordination.git
-cd ROS2Coordination
+git clone git@github.com:SynTEAM-Y/ROS2CoorAPI.git
+cd ROS2CoorAPI
 ```
 
 ### Robot workspace

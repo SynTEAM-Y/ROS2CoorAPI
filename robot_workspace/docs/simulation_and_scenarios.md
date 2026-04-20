@@ -63,7 +63,7 @@ Rviz display tree example:
 ```bash
 ros2 launch x3plus_multi_bringup one_robot.launch.py \
   robot_id:=123 \
-  map:=/absolute/path/to/map.yaml \
+  map:=/home/assoc/Downloads/ROS2CoorAPI/robot_workspace/x3plus_ws/maps/circular_map.yaml \
   rviz:=true
 ```
 
