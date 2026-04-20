@@ -81,7 +81,7 @@ export ROBOT=                 # Update to the correct name of the robot. ROBOT=P
 export ROBOT_TYPE=X3plus
 export RPLIDAR_TYPE=a1
 export CAMERA_TYPE=astraplus
-export REPO_PATH="$HOME/ROS2Coordination/robot_workspace" # Location of the git repository. 
+export REPO_PATH="$HOME/ROS2CoorAPI/robot_workspace" # Location of the git repository. 
 
 # =========================
 # Workspace helpers (Manual, explicit overlays)

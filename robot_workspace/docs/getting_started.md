@@ -53,8 +53,7 @@ This profile auto-loads ROS 2 Humble, adds helpers (`use_robot`, `launch_lidar`,
 cp ~/.bashrc ~/.bashrc.backup.$(date +%Y%m%d_%H%M%S)
 
 # Copy the .bashrc from the repo to the root
-cp ~/ROS2Coordination/robot_workspace/x3plus_ws/.bashrc ~/.bashrc
-
+cp ~/ROS2CoorAPI/robot_workspace/x3plus_ws/.bashrc ~/.bashrc
 # Apply it now in the current terminal
 source ~/.bashrc
 
