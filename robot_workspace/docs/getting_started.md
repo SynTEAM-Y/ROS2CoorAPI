@@ -16,8 +16,8 @@ This guide shows how to set up the `x3plus_ws` workspace and access all key robo
 ---
 ## 2. Clone the workspace
 ```bash
-git clone https://github.com/KarimNahas01/ROS2Coordination.git
-cd ~/ROS2Coordination/robot_workspace/x3plus_ws
+git clone git@github.com:SynTEAM-Y/ROS2CoorAPI.git
+cd ~/ROS2CoorAPI/robot_workspace/x3plus_ws
 ```
 
 ## 3. One-command bootstrap (installs deps, pulls camera stack, builds)
@@ -53,8 +53,7 @@ This profile auto-loads ROS 2 Humble, adds helpers (`use_robot`, `launch_lidar`,
 cp ~/.bashrc ~/.bashrc.backup.$(date +%Y%m%d_%H%M%S)
 
 # Copy the .bashrc from the repo to the root
-cp ~/ROS2Coordination/robot_workspace/x3plus_ws/.bashrc ~/.bashrc
-
+cp ~/ROS2CoorAPI/robot_workspace/x3plus_ws/.bashrc ~/.bashrc
 # Apply it now in the current terminal
 source ~/.bashrc
 
