@@ -1,0 +1,41 @@
+<?xml version="1.0"?>
+<launch>
+  <!-- Arguments -->
+  <arg name="use_sim_time" default="true"/>
+  <arg name="use_rviz" default="true"/>
+
+  <!-- Set use_sim_time parameter -->
+  <param name="/use_sim_time" value="$(var use_sim_time)"/>
+
+  <!-- URDF robot description -->
+  <let name="urdf_path" value="$(find-pkg-share yahboomcar_description)/urdf/yahboomcar_X3plus.urdf"/>
+  
+  <!-- RViz configuration -->
+  <let name="rviz_config_path" value="$(find-pkg-share yahboomcar_description)/rviz/yahboomcar.rviz"/>
+
+  <!-- Robot State Publisher: Publishes the robot's kinematic tree (TFs) from URDF -->
+  <node pkg="robot_state_publisher" exec="robot_state_publisher">
+    <param name="robot_description" value="$(command 'cat $(var urdf_path)')"/>
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
+  </node>
+
+  <!-- Gazebo Sim launch -->
+  <include file="$(find-pkg-share ros_gz_sim)/launch/gz_sim.launch.py">
+    <arg name="gz_args" value="-r $(find-pkg-share sim_gazebo_bringup)/worlds/empty.sdf"/>
+  </include>
+
+  <!-- Create/Spawn robot in Gazebo Sim -->
+  <node pkg="ros_gz_sim" exec="create" 
+        args="-topic /robot_description -name x3plus"
+        output="screen">
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
+  </node>
+
+  <!-- RViz visualization (optional) -->
+  <node pkg="rviz2" exec="rviz2" name="rviz2" output="screen"
+        args="-d $(var rviz_config_path)"
+        if="$(var use_rviz)">
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
+  </node>
+
+</launch>
