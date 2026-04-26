@@ -8,23 +8,20 @@ Gazebo simulation bringup package for the x3plus robot. This package provides la
 ```bash
 ros2 launch sim_gazebo_bringup robot_rviz.launch.py
 ```
+You'll be prompted with a numbered menu of available maps — type the
+number (or name), or just press Enter for the default (`plain_map`).
 
 ### 🤖 Full Gazebo Simulation (Recommended)
 ```bash
-# Default empty world
 ros2 launch sim_gazebo_bringup gazebo.launch.py
-
-# Pick a different world (any .sdf in worlds/ — currently: empty, office)
-ros2 launch sim_gazebo_bringup gazebo.launch.py world:=office
 ```
+You'll be prompted with a numbered menu of available worlds (currently
+`empty`, `office`) — type the number (or name), or press Enter for the
+default (`empty`).
 
-### 🏙️ RViz With a Map
+To skip the prompt and pick directly from the command line:
 ```bash
-# Default plain_map
-ros2 launch sim_gazebo_bringup robot_rviz.launch.py
-
-# Pick a different map (any .yaml in maps/ — e.g. plain_map,
-# turtlebot3_world, willow, yahboomcar, square_map, partial_office, ...)
+ros2 launch sim_gazebo_bringup gazebo.launch.py world:=office
 ros2 launch sim_gazebo_bringup robot_rviz.launch.py map:=turtlebot3_world
 ```
 
@@ -38,7 +35,8 @@ ros2 launch sim_gazebo_bringup gazebo.launch.py use_rviz:=false
 This package includes:
 - **Launch files**: Python launch files to start Gazebo simulation with x3plus
 - **Fallback launch**: RViz-only visualization without Gazebo (for testing/dependencies missing)
-- **World files**: SDF world definitions (empty world, office world)
+- **World files**: SDF world definitions (selectable at launch via an interactive menu or `world:=<name>`)
+- **Maps**: 2D occupancy grids for RViz (selectable at launch via an interactive menu or `map:=<name>`)
 - **Configuration**: RViz visualization setup
 
 ## Status ✅
@@ -152,14 +150,20 @@ ros2 launch sim_gazebo_bringup gazebo.launch.py use_rviz:=false use_sim_time:=fa
 |----------|---------|-------------|
 | `use_rviz` | `true` | Argument accepted but RViz node is **not launched** from this file (Humble `IfAction` limitation). Launch RViz separately with `robot_rviz.launch.py` |
 | `use_sim_time` | `true` | Use simulated time (required for Gazebo) |
-| `world` | `empty` | World to load. Basename of any `.sdf` in `worlds/` (currently `empty`, `office`) or an absolute path to a custom `.sdf`. The launcher prints the available list at startup. |
+| `world` | `empty` | World to load. Basename of any `.sdf` in `worlds/` (currently `empty`, `office`) or an absolute path to a custom `.sdf`. **If omitted on a TTY, an interactive menu is shown.** Pass on the CLI (`world:=office`) to skip the prompt. |
 
 ### robot_rviz.launch.py
 
 | Argument | Default | Description |
 |----------|---------|-------------|
 | `use_sim_time` | `false` | Use simulated time |
-| `map` | `plain_map` | Map to load. Basename of any `.yaml` in `maps/` or an absolute path to a custom `.yaml`. The launcher prints the available list at startup. |
+| `map` | `plain_map` | Map to load. Basename of any `.yaml` in `maps/` or an absolute path to a custom `.yaml`. **If omitted on a TTY, an interactive menu is shown.** Pass on the CLI (`map:=willow`) to skip the prompt. |
+
+#### Interactive picker behaviour
+
+- If the argument is **supplied on the command line** (`world:=...` or `map:=...`), the prompt is skipped — CLI wins.
+- If stdin is **not a TTY** (nested launch file, CI), the prompt is silently skipped and the default is used — safe to use as a sub-launch.
+- At the prompt, **empty input** selects the default. You can type either the **number** or the **name**. Invalid input re-prompts.
 
 ## Verifying the Simulation Works
 
@@ -204,21 +208,23 @@ ros2 topic pub /cmd_vel geometry_msgs/Twist '{linear: {x: 0.1}}'
 
 ## Available Worlds
 
-Any `.sdf` file in `worlds/` is selectable via `world:=<name>` (without the
-extension). Currently shipped:
+Any `.sdf` file in `worlds/` is selectable. Either pick from the
+interactive menu shown at launch, or skip the prompt with
+`world:=<name>`. Currently shipped:
 
 - **empty.sdf** — Minimal world with ground plane, good for testing
 - **office.sdf** — Office environment with obstacles
 
 ## Available Maps (RViz)
 
-Any `.yaml` file in `maps/` is selectable via `map:=<name>` (without the
-extension). Currently shipped: `plain_map`, `circular_map`, `square_map`,
+Any `.yaml` file in `maps/` is selectable. Either pick from the
+interactive menu shown at launch, or skip the prompt with `map:=<name>`.
+Currently shipped: `plain_map`, `circular_map`, `square_map`,
 `partial_office`, `turtlebot3_world`, `willow`, `yahboomcar`, `test_map`,
 `map_20251006_221007`.
 
 Add your own by dropping a matching `.pgm`/`.yaml` pair into `maps/` and
-rebuilding the package.
+rebuilding the package — it'll show up in the menu automatically.
 
 ## Package Structure
 
@@ -321,10 +327,24 @@ To add a custom Gazebo world:
 
 2. Edit `my_world.sdf` according to [Gazebo SDF documentation](https://gazebosim.org/docs/latest/building_models/)
 
-3. Use in launch file (after rebuilding):
+3. Rebuild and launch — the new world will appear automatically in the
+   interactive picker, or you can select it directly:
    ```bash
-   ros2 launch sim_gazebo_bringup gazebo.launch.py
-   # The world will be loaded from worlds/ folder
+   colcon build --packages-select sim_gazebo_bringup
+   source install/setup.bash
+   ros2 launch sim_gazebo_bringup gazebo.launch.py world:=my_world
+   ```
+
+## Adding Custom Maps
+
+1. Drop a matching `.pgm` and `.yaml` pair into the `maps/` directory
+   (the `.yaml` should reference the `.pgm` by relative filename, as
+   produced by `nav2_map_server map_saver_cli`).
+2. Rebuild and launch — the new map will appear in the picker:
+   ```bash
+   colcon build --packages-select sim_gazebo_bringup
+   source install/setup.bash
+   ros2 launch sim_gazebo_bringup robot_rviz.launch.py map:=my_map
    ```
 
 ## Odometry
