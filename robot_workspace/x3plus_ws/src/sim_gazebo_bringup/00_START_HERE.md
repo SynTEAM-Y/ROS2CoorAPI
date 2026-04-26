@@ -14,7 +14,7 @@
 ### Arm & Gripper Control
 - 5-DOF arm + gripper via `arm_controller` node
 - Individual Gazebo JointPositionControllers for each arm joint
-- Active mimic joint control for gripper linkage (Ignition doesn't enforce URDF mimic)
+- Active mimic joint **filtering** for gripper linkage (Ignition doesn't enforce URDF mimic)
 - Pick-and-place sequence
 
 ---
@@ -54,7 +54,7 @@ For differential drive robot:
 | Yaw (turns) | Ignition IMU plugin → ros_gz_bridge | `/imu` (Gazebo only) |
 
 Integration: `x += v·cos(θ)·Δt`, `y += v·sin(θ)·Δt`, `θ += ω·Δt`  
-See **[ODOMETRY_CALCULATION.md](ODOMETRY_CALCULATION.md)** for full details.
+See the **Odometry** section of `README.md` for full details.
 
 ---
 
@@ -92,7 +92,7 @@ A - Turn Left  | 3 - 90° L+Move  |
 D - Turn Right | 4 - 90° R+Move  |
 Space - Stop   |                 |
 
-Speeds: forward/backward = 0.3 m/s, rotation = 1.0 rad/s
+Speeds: forward/backward = 0.8 m/s, rotation = 1.0 rad/s
 90° turns: closed-loop via IMU (Gazebo) or odom (RViz)
 ```
 
@@ -141,10 +141,10 @@ Type: IN_PLACE
 1. **Gazebo Simulation** — Full physics with DiffDrive (4-wheel, asymmetric friction μ1=1.0/μ2=0.05), arm JointPositionControllers, IMU sensor
 2. **RViz Visualization** — RViz-only mode with `diff_drive_simulator`, map display, static `map→odom` TF
 3. **90° Turns** — Closed-loop via IMU (Gazebo) or odom (RViz) yaw tracking; theoretical ω = 4.699 rad/s, commanded ω = 1.50 rad/s
-4. **Arm Control** — 5-DOF arm + gripper with individual Gazebo JointPositionControllers and active mimic joint control
-5. **Pick & Place** — Automated 10-step sequence in arm_controller
+4. **Arm Control** — 5-DOF arm + gripper. Each arm joint and `grip_joint` has an Ignition `JointPositionController` (PID). The 5 finger linkage joints are passive (no controller) — they follow `grip_joint` via the URDF `<mimic>` tag computed by `robot_state_publisher`.
+5. **Pick & Place** — Automated 12-step sequence in `arm_controller` (P key)
 6. **Odometry** — Ignition DiffDrive plugin → `/odom` (Gazebo) or `diff_drive_simulator` node (RViz-only); IMU crosscheck in turns
-7. **Gripper Mimic** — `gripper_mimic_relay` node actively relays `grip_joint` position to 5 linkage joints (Ignition doesn't enforce URDF mimic)
+7. **Gripper Mimic** — `gripper_mimic_relay` node **filters** the 5 mimic joint entries out of `/joint_states_raw` (raw Ignition output) and republishes the trimmed message on `/joint_states`. Because the mimic joints are absent from the message, `robot_state_publisher` honours the URDF `<mimic>` tag and computes finger positions from `grip_joint`.
 8. **URDF→SDF Pipeline** — `ign sdf -p` pre-conversion at launch time preserves all model plugins
 
 ---
@@ -155,7 +155,7 @@ Type: IN_PLACE
 |------|---------|
 | `00_START_HERE.md` | This quick reference |
 | `README.md` | Package overview, topics, launch args, troubleshooting |
-| `ODOMETRY_CALCULATION.md` | **Odometry math, frames, IMU crosscheck, monitoring** |
+| `README.md` (Odometry section) | **Odometry math, frames, IMU crosscheck, monitoring** |
 | `90DEGREE_TURN_FORMULA.md` | Detailed turn formula math |
 | `VISUAL_GUIDE_90DEGREE_TURN.md` | Turn diagrams |
 | `WHEEL_PARAMETERS_REFERENCE.md` | Wheel config reference |

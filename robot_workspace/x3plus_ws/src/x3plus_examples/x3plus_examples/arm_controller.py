@@ -1,322 +1,411 @@
 #!/usr/bin/env python3
 """
-X3Plus Arm Controller — Keyboard Teleop for 5-DOF Arm + Gripper
+Arm Controller Node
 
-Publishes joint positions to /joint_states so robot_state_publisher
-can visualize the arm in both RViz and Gazebo simulation modes.
+Interactive keyboard control for the 5-DOF robot arm and gripper.
 
-Joint mapping:
-  arm_joint1 : base rotation          [-π/2,  π/2]
-  arm_joint2 : shoulder               [-π/2,  π/2]
-  arm_joint3 : elbow upper            [-π/2,  π/2]
-  arm_joint4 : elbow lower            [-π/2,  π/2]
-  arm_joint5 : wrist                  [-π/2,  π  ]
-  grip_joint : gripper (open=0, closed=-π/2) [-π/2, 0]
-
-Usage:
-    ros2 run x3plus_examples arm_controller
-
-Keyboard Controls:
-    1-5  — Select arm joint 1-5
-    6    — Select gripper joint
-    W/w  — Increase selected joint angle (+0.1 rad)
-    S/s  — Decrease selected joint angle (-0.1 rad)
-    O/o  — Open gripper  (grip_joint → 0.0)
-    C/c  — Close gripper (grip_joint → -π/2)
-    A/a  — Home pose     (all joints → 0)
-    Z/z  — Init pose     (natural ready position)
-    B/b  — Down pose     (arm folded down)
-    P/p  — Execute pick-and-place sequence (10 steps)
-    H/h  — Show this help menu
-    Q/q  — Quit
+Controls:
+  1-5: Select arm joint (arm_joint1 through arm_joint5)
+  6: Select gripper
+  W/S: Increase/decrease selected joint position
+  O/C: Open/close gripper
+  A: Home pose
+  Z: Init pose
+  B: Down pose
+  P: Pick and place sequence
+  H: Help menu
+  Q: Quit
 """
-
-import math
-import sys
-import termios
-import threading
-import time
-import tty
 
 import rclpy
 from rclpy.node import Node
+from geometry_msgs.msg import Twist, TransformStamped
+from std_msgs.msg import Float64
 from sensor_msgs.msg import JointState
-
-# ---------------------------------------------------------------------------
-# Joint definitions
-# ---------------------------------------------------------------------------
-ARM_JOINTS = ['arm_joint1', 'arm_joint2', 'arm_joint3', 'arm_joint4', 'arm_joint5']
-GRIP_JOINT = 'grip_joint'
-ALL_JOINTS = ARM_JOINTS + [GRIP_JOINT]
-
-JOINT_LIMITS = {
-    'arm_joint1': (-math.pi / 2, math.pi / 2),
-    'arm_joint2': (-math.pi / 2, math.pi / 2),
-    'arm_joint3': (-math.pi / 2, math.pi / 2),
-    'arm_joint4': (-math.pi / 2, math.pi / 2),
-    'arm_joint5': (-math.pi / 2, math.pi),
-    # Match URDF exactly: lower=-1.54, upper=0.0
-    'grip_joint': (-1.54, 0.0),
-}
-
-GRIP_CLOSED = JOINT_LIMITS['grip_joint'][0]
-
-# Preset poses  {joint_name: angle_rad}
-HOME_POSE = {j: 0.0 for j in ALL_JOINTS}
-
-INIT_POSE = {
-    'arm_joint1': 0.0,
-    'arm_joint2': math.pi / 4,   #  45° – shoulder raised
-    'arm_joint3': -math.pi / 4,  # -45° – elbow bent
-    'arm_joint4': 0.0,
-    'arm_joint5': 0.0,
-    'grip_joint': 0.0,           #  gripper open
-}
-
-DOWN_POSE = {
-    'arm_joint1': 0.0,
-    'arm_joint2': -math.pi / 2,  # shoulder fully down
-    'arm_joint3': math.pi / 4,
-    'arm_joint4': math.pi / 4,
-    'arm_joint5': 0.0,
-    'grip_joint': -math.pi / 4,
-}
-
-# Pick-and-place waypoints (list of pose dicts, 10 steps)
-PICK_PLACE_SEQUENCE = [
-    # Step 1: home
-    HOME_POSE,
-    # Step 2: open gripper
-    {**HOME_POSE, 'grip_joint': 0.0},
-    # Step 3: approach above object
-    {'arm_joint1': 0.0, 'arm_joint2': math.pi / 4, 'arm_joint3': -math.pi / 6,
-     'arm_joint4': 0.0, 'arm_joint5': 0.0, 'grip_joint': 0.0},
-    # Step 4: lower to pick position
-    {'arm_joint1': 0.0, 'arm_joint2': math.pi / 3, 'arm_joint3': -math.pi / 3,
-     'arm_joint4': -math.pi / 6, 'arm_joint5': 0.0, 'grip_joint': 0.0},
-    # Step 5: close gripper
-    {'arm_joint1': 0.0, 'arm_joint2': math.pi / 3, 'arm_joint3': -math.pi / 3,
-     'arm_joint4': -math.pi / 6, 'arm_joint5': 0.0, 'grip_joint': GRIP_CLOSED},
-    # Step 6: lift object
-    {'arm_joint1': 0.0, 'arm_joint2': math.pi / 4, 'arm_joint3': -math.pi / 6,
-     'arm_joint4': 0.0, 'arm_joint5': 0.0, 'grip_joint': GRIP_CLOSED},
-    # Step 7: rotate to place position
-    {'arm_joint1': math.pi / 3, 'arm_joint2': math.pi / 4, 'arm_joint3': -math.pi / 6,
-     'arm_joint4': 0.0, 'arm_joint5': 0.0, 'grip_joint': GRIP_CLOSED},
-    # Step 8: lower to place height
-    {'arm_joint1': math.pi / 3, 'arm_joint2': math.pi / 3, 'arm_joint3': -math.pi / 3,
-     'arm_joint4': -math.pi / 6, 'arm_joint5': 0.0, 'grip_joint': GRIP_CLOSED},
-    # Step 9: open gripper (release)
-    {'arm_joint1': math.pi / 3, 'arm_joint2': math.pi / 3, 'arm_joint3': -math.pi / 3,
-     'arm_joint4': -math.pi / 6, 'arm_joint5': 0.0, 'grip_joint': 0.0},
-    # Step 10: return to home
-    HOME_POSE,
-]
-
-STEP_DURATION = 1.0  # seconds per pick-and-place step
-INTERPOLATION_STEPS = 20  # smoother motion between waypoints
-
-# ---------------------------------------------------------------------------
-# Display helpers
-# ---------------------------------------------------------------------------
-HELP_MENU = """
-╔══════════════════════════════════════════════════════════════╗
-║                  X3PLUS ARM CONTROLLER                       ║
-╚══════════════════════════════════════════════════════════════╝
-
-JOINT SELECTION:
-  1 → arm_joint1 (base rotation)
-  2 → arm_joint2 (shoulder)
-  3 → arm_joint3 (elbow upper)
-  4 → arm_joint4 (elbow lower)
-  5 → arm_joint5 (wrist)
-  6 → grip_joint (gripper)
-
-JOINT ADJUSTMENT (selected joint):
-  W / w  →  + 0.1 rad
-  S / s  →  - 0.1 rad
-
-GRIPPER SHORTCUTS:
-  O / o  →  Open  gripper (0.0 rad)
-  C / c  →  Close gripper (-π/2 rad)
-
-PRESET POSES:
-  A / a  →  Home  (all joints 0)
-  Z / z  →  Init  (natural ready position)
-  B / b  →  Down  (arm folded down)
-
-SEQUENCE:
-  P / p  →  Execute pick-and-place (10 steps × 1 s each)
-
-SYSTEM:
-  H / h  →  Show this help menu
-  Q / q  →  Quit
-"""
+import sys
+import termios
+import tty
+import select
+import math
+import threading
 
 
 class ArmController(Node):
-    """Keyboard-controlled arm node — publishes to /joint_states."""
-
-    STEP_SIZE = 0.1  # radians per key press
-
     def __init__(self):
         super().__init__('arm_controller')
-
-        self.pub = self.create_publisher(JointState, 'joint_states', 10)
-
-        # Current joint angles
-        self.positions = {j: 0.0 for j in ALL_JOINTS}
-
-        # Currently selected joint (0-indexed into ALL_JOINTS)
-        self.selected = 0  # arm_joint1 by default
-
-        self._running = True
-        self._pick_place_busy = False
-
-        # Publish at 20 Hz
-        self.timer = self.create_timer(0.05, self._publish)
-
-        self.get_logger().info('\n' + HELP_MENU)
-        self._print_status()
-
-    # ------------------------------------------------------------------
-    # Publisher
-    # ------------------------------------------------------------------
-    def _publish(self):
-        msg = JointState()
-        msg.header.stamp = self.get_clock().now().to_msg()
-        msg.name = ALL_JOINTS
-        msg.position = [self.positions[j] for j in ALL_JOINTS]
-        self.pub.publish(msg)
-
-    # ------------------------------------------------------------------
-    # State display
-    # ------------------------------------------------------------------
-    def _print_status(self):
-        sel_name = ALL_JOINTS[self.selected]
-        lines = [f'\n  Selected joint: [{self.selected + 1}] {sel_name}']
-        for i, j in enumerate(ALL_JOINTS):
-            marker = '►' if i == self.selected else ' '
-            lo, hi = JOINT_LIMITS[j]
-            lines.append(
-                f'  {marker} {j:14s} {self.positions[j]:+.3f} rad'
-                f'  [{lo:+.3f}, {hi:+.3f}]'
+        
+        # Arm joint names
+        self.arm_joints = [
+            'arm_joint1',
+            'arm_joint2',
+            'arm_joint3',
+            'arm_joint4',
+            'arm_joint5'
+        ]
+        
+        # Create publishers for each arm joint
+        self.arm_pubs = {}
+        for joint_name in self.arm_joints:
+            topic_name = f'/{joint_name}_cmd_pos'
+            self.arm_pubs[joint_name] = self.create_publisher(
+                Float64,
+                topic_name,
+                10
             )
-        print('\n'.join(lines) + '\n')
-
-    # ------------------------------------------------------------------
-    # Pose application
-    # ------------------------------------------------------------------
-    def _apply_pose(self, pose: dict, label: str):
-        for j, val in pose.items():
-            self.positions[j] = self._clamp(j, val)
-        self.get_logger().info(f'Pose applied: {label}')
-        self._print_status()
-
-    def _clamp(self, joint: str, value: float) -> float:
-        lo, hi = JOINT_LIMITS[joint]
-        return max(lo, min(hi, value))
-
-    # ------------------------------------------------------------------
-    # Pick-and-place sequence (runs in background thread)
-    # ------------------------------------------------------------------
-    def _run_pick_place(self):
-        self._pick_place_busy = True
-        self.get_logger().info(
-            f'Starting pick-and-place sequence ({len(PICK_PLACE_SEQUENCE)} steps) …'
+        
+        # Gripper publisher
+        self.gripper_pub = self.create_publisher(
+            Float64,
+            '/grip_joint_cmd_pos',
+            10
         )
-        for step_idx, pose in enumerate(PICK_PLACE_SEQUENCE):
-            if not self._running:
-                break
-            self.get_logger().info(
-                f'  Step {step_idx + 1}/{len(PICK_PLACE_SEQUENCE)}'
-            )
-            # Interpolate from current pose to target to avoid abrupt jumps.
-            start_pose = {j: self.positions[j] for j in ALL_JOINTS}
-            target_pose = {
-                j: self._clamp(j, pose.get(j, self.positions[j]))
-                for j in ALL_JOINTS
-            }
+        
+        # Subscribe to joint states for feedback
+        self.joint_state_sub = self.create_subscription(
+            JointState,
+            '/joint_states',
+            self.joint_state_callback,
+            10
+        )
+        
+        # Current joint positions
+        self.current_positions = {
+            'arm_joint1': 0.0,
+            'arm_joint2': 0.0,
+            'arm_joint3': 0.0,
+            'arm_joint4': 0.0,
+            'arm_joint5': 0.0,
+            'grip_joint': 0.0
+        }
+        
+        # Control parameters
+        self.selected_joint_idx = 0  # 0-4 for arm joints, 5 for gripper
+        self.joint_increment = 0.15  # radians per W/S press
+        # Gripper convention (matches manufacturer SRDF):
+        #   grip_joint =  0.00  -> fingers CLOSED (servo center 90°)
+        #   grip_joint = -1.54  -> fingers fully OPEN (matches SRDF "open" state)
+        self.gripper_open_pos   = -1.54
+        self.gripper_closed_pos =  0.00
 
-            for i in range(1, INTERPOLATION_STEPS + 1):
-                if not self._running:
-                    break
-                alpha = i / INTERPOLATION_STEPS
-                for j in ALL_JOINTS:
-                    self.positions[j] = (
-                        start_pose[j] + alpha * (target_pose[j] - start_pose[j])
-                    )
-                time.sleep(STEP_DURATION / INTERPOLATION_STEPS)
+        # Predefined poses — arm_joint2 NEGATIVE = tilts FORWARD (away from car body)
+        #                    arm_joint2 POSITIVE = tilts BACKWARD (into car body — AVOID)
+        # All poses keep arm_joint2 <= 0 so the arm stays in the forward half-space.
+        self.home_pose  = [0.0,  0.0,    0.0,    0.0,  0.0]  # arm straight up (safe)
+        self.init_pose  = [0.0, -0.5,   -0.4,    0.0,  0.0]  # arm forward-raised (safe ready)
+        self.down_pose  = [0.0, -1.0,   -0.3,   -0.3,  0.0]  # arm reaching forward-down
 
-            self._print_status()
-        self.get_logger().info('Pick-and-place sequence complete.')
-        self._pick_place_busy = False
+        # Smooth trajectory: target positions, velocity & acceleration limits
+        # Raised for Gazebo simulation (real robot limit is 1 rad/s, sim runs faster)
+        self.smooth_speed = 4.0    # max joint speed (rad/s)
+        self.smooth_accel = 12.0   # max joint acceleration (rad/s²)
+        # _smooth_pos is the internal integrator — NEVER overwritten by callbacks
+        self._smooth_pos = dict(self.current_positions)
+        # Gripper starts CLOSED to match diff_drive_simulator initial state
+        self._smooth_pos['grip_joint'] = self.gripper_closed_pos
+        # Per-joint velocity state for trapezoidal profile
+        self._smooth_vel = {k: 0.0 for k in self._smooth_pos}
+        # target_positions is set by key presses
+        self.target_positions = dict(self._smooth_pos)
+        self._pick_place_running = False  # guard against double-start
 
-    # ------------------------------------------------------------------
-    # Key handling
-    # ------------------------------------------------------------------
-    def handle_key(self, key: str):
-        if self._pick_place_busy and key not in ('q', 'Q'):
-            print('  [Pick-and-place running — press Q to quit]')
+        # 200 Hz timer drives the smooth interpolation (was 100 Hz)
+        self.motion_timer = self.create_timer(0.005, self._motion_step)
+        
+        self.get_logger().info('========================================')
+        self.get_logger().info('ARM CONTROLLER INITIALIZED')
+        self.get_logger().info('========================================')
+        self.print_help()
+    
+    def joint_state_callback(self, msg):
+        """Update current joint positions from feedback"""
+        for i, name in enumerate(msg.name):
+            if name in self.current_positions:
+                self.current_positions[name] = msg.position[i]
+    
+    def print_help(self):
+        """Print help menu"""
+        print('\n' + '='*60)
+        print('ARM & GRIPPER CONTROL')
+        print('='*60)
+        print('Joint Selection:')
+        print('  1-5     : Select arm joint (arm_joint1 to arm_joint5)')
+        print('  6       : Select gripper')
+        print('')
+        print('Movement:')
+        print('  W       : Increase selected joint position (+0.1 rad)')
+        print('  S       : Decrease selected joint position (-0.1 rad)')
+        print('')
+        print('Gripper:')
+        print('  O       : Open gripper')
+        print('  C       : Close gripper')
+        print('')
+        print('Predefined Poses:')
+        print('  A       : Home pose (all joints to zero)')
+        print('  Z       : Init pose (ready position)')
+        print('  B       : Down pose (reaching down)')
+        print('  P       : Pick and place sequence (automated)')
+        print('')
+        print('System:')
+        print('  H       : Show this help')
+        print('  Q       : Quit')
+        print('='*60)
+        self.print_status()
+    
+    def print_status(self):
+        """Print current status"""
+        if self.selected_joint_idx < 5:
+            joint_name = self.arm_joints[self.selected_joint_idx]
+            current_pos = self._smooth_pos[joint_name]
+            target_pos  = self.target_positions[joint_name]
+            print(f'\nSelected: {joint_name} (pos: {current_pos:.2f} → {target_pos:.2f} rad)')
+        else:
+            current_pos = self._smooth_pos['grip_joint']
+            status = 'OPEN' if current_pos < -0.5 else 'CLOSED'
+            print(f'\nSelected: Gripper (current: {current_pos:.2f} rad, status: {status})')
+    
+    def _step_joint(self, name, publisher, dt):
+        """Trapezoidal-velocity step toward target for one joint.
+        Limits both velocity (smooth_speed) and acceleration (smooth_accel),
+        and decelerates so the joint arrives at target with zero velocity."""
+        pos = self._smooth_pos[name]
+        vel = self._smooth_vel[name]
+        target = self.target_positions[name]
+        error = target - pos
+
+        # Snap-to-target deadzone: when both error and velocity are small, stop cleanly
+        # Prevents asymptotic oscillation around the target.
+        if abs(error) < 5e-3 and abs(vel) < 0.2:
+            if pos != target or vel != 0.0:
+                self._smooth_pos[name] = target
+                self._smooth_vel[name] = 0.0
+                msg = Float64()
+                msg.data = target
+                publisher.publish(msg)
             return
 
-        if key in '123456':
-            self.selected = int(key) - 1
-            print(f'\n  → Selected: [{key}] {ALL_JOINTS[self.selected]}')
-            self._print_status()
+        # Desired velocity that allows decel-to-zero at the target:
+        #   v_max_to_stop = sqrt(2 * a * |error|), signed by error direction
+        v_stop = math.copysign(math.sqrt(2.0 * self.smooth_accel * abs(error)), error)
+        # Cap by absolute speed limit
+        v_des = max(-self.smooth_speed, min(self.smooth_speed, v_stop))
 
-        elif key in ('w', 'W'):
-            j = ALL_JOINTS[self.selected]
-            self.positions[j] = self._clamp(j, self.positions[j] + self.STEP_SIZE)
-            print(f'  ↑ {j}  {self.positions[j]:+.3f} rad')
-            self._print_status()
+        # Apply acceleration limit when changing velocity
+        dv_max = self.smooth_accel * dt
+        dv = v_des - vel
+        if dv > dv_max:
+            dv = dv_max
+        elif dv < -dv_max:
+            dv = -dv_max
+        vel = vel + dv
 
-        elif key in ('s', 'S'):
-            j = ALL_JOINTS[self.selected]
-            self.positions[j] = self._clamp(j, self.positions[j] - self.STEP_SIZE)
-            print(f'  ↓ {j}  {self.positions[j]:+.3f} rad')
-            self._print_status()
+        # Integrate position
+        pos = pos + vel * dt
 
-        elif key in ('o', 'O'):
-            self.positions['grip_joint'] = 0.0
-            print('  ○ Gripper OPEN')
+        self._smooth_pos[name] = pos
+        self._smooth_vel[name] = vel
 
-        elif key in ('c', 'C'):
-            self.positions['grip_joint'] = JOINT_LIMITS['grip_joint'][0]
-            print('  ● Gripper CLOSED')
+        msg = Float64()
+        msg.data = pos
+        publisher.publish(msg)
 
-        elif key in ('a', 'A'):
-            self._apply_pose(HOME_POSE, 'HOME')
+    def _motion_step(self):
+        """Called at 200 Hz — trapezoidal profile for every joint."""
+        dt = 0.005
+        for joint_name in self.arm_joints:
+            self._step_joint(joint_name, self.arm_pubs[joint_name], dt)
+        self._step_joint('grip_joint', self.gripper_pub, dt)
 
-        elif key in ('z', 'Z'):
-            self._apply_pose(INIT_POSE, 'INIT')
+    def set_joint_target(self, joint_idx, position):
+        """Set smooth target for a single joint."""
+        if joint_idx < 5:
+            joint_name = self.arm_joints[joint_idx]
+            self.target_positions[joint_name] = position
+            self.get_logger().info(f'Target {joint_name}: {position:.2f} rad ({math.degrees(position):.1f}°)')
+        else:
+            self.target_positions['grip_joint'] = position
+            status = 'OPEN' if position < -0.5 else 'CLOSED'
+            self.get_logger().info(f'Target gripper: {position:.2f} rad ({status})')
 
-        elif key in ('b', 'B'):
-            self._apply_pose(DOWN_POSE, 'DOWN')
+    def publish_joint_position(self, joint_idx, position):
+        """Set smooth target for a joint (kept for backwards compatibility)."""
+        self.set_joint_target(joint_idx, position)
 
-        elif key in ('p', 'P'):
-            if self._pick_place_busy:
-                print('  [Pick-and-place already running]')
+    def publish_pose(self, positions, gripper_pos=None):
+        """Set smooth targets for a full arm pose."""
+        for i, pos in enumerate(positions):
+            joint_name = self.arm_joints[i]
+            self.target_positions[joint_name] = pos
+        if gripper_pos is not None:
+            self.target_positions['grip_joint'] = gripper_pos
+    
+    def execute_pick_and_place(self):
+        """Launch pick and place in a background thread so the motion timer keeps running."""
+        if self._pick_place_running:
+            self.get_logger().warn('Pick and place already running — ignoring')
+            return
+        t = threading.Thread(target=self._pick_place_thread, daemon=True)
+        t.start()
+
+    def _motion_done(self, tol=0.02):
+        """Return True when all joints are at their targets and stopped."""
+        for joint_name in self.arm_joints:
+            if abs(self._smooth_pos[joint_name] - self.target_positions[joint_name]) > tol:
+                return False
+            if abs(self._smooth_vel[joint_name]) > 0.01:
+                return False
+        if abs(self._smooth_pos['grip_joint'] - self.target_positions['grip_joint']) > tol:
+            return False
+        if abs(self._smooth_vel['grip_joint']) > 0.01:
+            return False
+        return True
+
+    def _wait_motion_done(self, timeout=6.0, settle=0.05):
+        """Block (in background thread) until motion completes or timeout.
+        Adds a short settle delay after completion for physical stability."""
+        import time
+        # Allow timer to register new target before checking
+        time.sleep(0.05)
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if self._motion_done():
+                time.sleep(settle)
+                return True
+            time.sleep(0.01)
+        return False  # timed out
+
+    def _pick_place_thread(self):
+        """Runs in a background thread — waits for each motion to complete before next step.
+        Trajectory is designed so the arm always stays in the FORWARD half-space,
+        avoiding collision with the camera tower behind base_link."""
+        import time
+        self._pick_place_running = True
+        self.get_logger().info('='*60)
+        self.get_logger().info('STARTING PICK AND PLACE SEQUENCE')
+        self.get_logger().info('='*60)
+
+        # All poses keep arm_joint2 <= 0 (forward-tilting, never backward into car body).
+        # reach_down = manufacturer servo [90, 2, 60, 40, 90] → URDF rad conversion
+        pre_pick   = [0.0,  -0.8,  -0.4, -0.3,  0.0]  # arm forward-raised, approach
+        reach_down = [0.0,  -1.536, -0.524, -0.873, 0.0]  # mfr reach-down (servo 2,60,40)
+        lifted     = [0.0,  -0.8,  -0.4, -0.3,  0.0]  # same as pre_pick, holding object up
+        # Rotate through home (arm_joint2=0) so arm stays vertical during turn — avoids sweep collision
+        rot_lifted = [1.2,  -0.8,  -0.4, -0.3,  0.0]  # rotated ~69° left, arm raised forward
+        rot_reach  = [1.2,  -1.536, -0.524, -0.873, 0.0]  # rotated, reaching down to place
+
+        # (description, arm_pos, grip_pos, post_pause_s)
+        steps = [
+            ('1. Home — arm up, gripper open',     self.home_pose, self.gripper_open_pos,   0.5),
+            ('2. Pre-pick approach',               pre_pick,       self.gripper_open_pos,   0.4),
+            ('3. Reach down to object',            reach_down,     self.gripper_open_pos,   0.5),
+            ('4. Close gripper',                   reach_down,     self.gripper_closed_pos, 1.0),
+            ('5. Lift to carry height',            lifted,         self.gripper_closed_pos, 0.4),
+            ('6. Return to home (safe for rotate)',self.home_pose, self.gripper_closed_pos, 0.4),
+            ('7. Rotate to place side',            rot_lifted,     self.gripper_closed_pos, 0.4),
+            ('8. Lower to place location',         rot_reach,      self.gripper_closed_pos, 0.5),
+            ('9. Open gripper — release',          rot_reach,      self.gripper_open_pos,   1.0),
+            ('10. Lift from place',                rot_lifted,     self.gripper_open_pos,   0.4),
+            ('11. Return toward home',             self.home_pose, self.gripper_open_pos,   0.4),
+            ('12. Close gripper at home',          self.home_pose, self.gripper_closed_pos, 0.5),
+        ]
+
+        for step_name, arm_pos, grip_pos, post_pause in steps:
+            self.get_logger().info(step_name)
+            self.publish_pose(arm_pos, grip_pos)
+            if not self._wait_motion_done(timeout=8.0):
+                self.get_logger().warn(f'Timeout on: {step_name}')
+            if post_pause > 0.0:
+                time.sleep(post_pause)
+
+        self.get_logger().info('='*60)
+        self.get_logger().info('PICK AND PLACE SEQUENCE COMPLETED')
+        self.get_logger().info('='*60)
+        self._pick_place_running = False
+    
+    def handle_keypress(self, key):
+        """Handle keyboard input"""
+        # Joint selection (1-6)
+        if key in ['1', '2', '3', '4', '5']:
+            self.selected_joint_idx = int(key) - 1
+            self.print_status()
+            return True
+        elif key == '6':
+            self.selected_joint_idx = 5
+            self.print_status()
+            return True
+        
+        # Movement (W/S)
+        elif key.lower() == 'w':
+            if self.selected_joint_idx < 5:
+                joint_name = self.arm_joints[self.selected_joint_idx]
+                new_target = self.target_positions[joint_name] + self.joint_increment
+                self.set_joint_target(self.selected_joint_idx, new_target)
             else:
-                t = threading.Thread(target=self._run_pick_place, daemon=True)
-                t.start()
+                # W: decrease grip value toward gripper_open_pos (-1.0)
+                new_target = max(self.target_positions['grip_joint'] - self.joint_increment, self.gripper_open_pos)
+                self.set_joint_target(5, new_target)
+            return True
 
-        elif key in ('h', 'H'):
-            print(HELP_MENU)
+        elif key.lower() == 's':
+            if self.selected_joint_idx < 5:
+                joint_name = self.arm_joints[self.selected_joint_idx]
+                new_target = self.target_positions[joint_name] - self.joint_increment
+                self.set_joint_target(self.selected_joint_idx, new_target)
+            else:
+                # S: increase grip value toward gripper_closed_pos (0.0)
+                new_target = min(self.target_positions['grip_joint'] + self.joint_increment, self.gripper_closed_pos)
+                self.set_joint_target(5, new_target)
+            return True
+        
+        # Gripper control (O/C)
+        elif key.lower() == 'o':
+            self.publish_joint_position(5, self.gripper_open_pos)
+            return True
+        
+        elif key.lower() == 'c':
+            self.publish_joint_position(5, self.gripper_closed_pos)
+            return True
+        
+        # Predefined poses (A/Z/B/P)
+        elif key.lower() == 'a':
+            self.get_logger().info('Moving to HOME pose')
+            self.publish_pose(self.home_pose)
+            return True
+        
+        elif key.lower() == 'z':
+            self.get_logger().info('Moving to INIT pose')
+            self.publish_pose(self.init_pose)
+            return True
+        
+        elif key.lower() == 'b':
+            self.get_logger().info('Moving to DOWN pose')
+            self.publish_pose(self.down_pose)
+            return True
+        
+        elif key.lower() == 'p':
+            self.execute_pick_and_place()
+            return True
+        
+        # Help and quit
+        elif key.lower() == 'h':
+            self.print_help()
+            return True
+        
+        elif key.lower() == 'q':
+            self.get_logger().info('Quitting...')
+            return False
+        
+        return True
 
-        elif key in ('q', 'Q'):
-            self._running = False
 
-    def shutdown(self):
-        self._running = False
-
-
-# ---------------------------------------------------------------------------
-# Keyboard reader (raw mode, non-blocking char read)
-# ---------------------------------------------------------------------------
 def get_key(settings):
+    """Get a single keypress from terminal"""
     tty.setraw(sys.stdin.fileno())
-    key = sys.stdin.read(1)
+    # Use select to check if input is available (non-blocking with timeout)
+    rlist, _, _ = select.select([sys.stdin], [], [], 0.1)
+    if rlist:
+        key = sys.stdin.read(1)
+    else:
+        key = ''
     termios.tcsetattr(sys.stdin, termios.TCSADRAIN, settings)
     return key
 
@@ -324,20 +413,27 @@ def get_key(settings):
 def main(args=None):
     rclpy.init(args=args)
     node = ArmController()
-
-    old_settings = termios.tcgetattr(sys.stdin)
-    spin_thread = threading.Thread(target=rclpy.spin, args=(node,), daemon=True)
-    spin_thread.start()
-
+    
+    # Save terminal settings
+    settings = termios.tcgetattr(sys.stdin)
+    
     try:
-        while node._running and rclpy.ok():
-            key = get_key(old_settings)
-            node.handle_key(key)
-    except KeyboardInterrupt:
-        pass
+        while rclpy.ok():
+            # Spin once to process callbacks
+            rclpy.spin_once(node, timeout_sec=0.1)
+            
+            # Check for keyboard input
+            key = get_key(settings)
+            if key:
+                if not node.handle_keypress(key):
+                    break
+    
+    except Exception as e:
+        print(f'Error: {e}')
+    
     finally:
-        termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
-        node.shutdown()
+        # Restore terminal settings
+        termios.tcsetattr(sys.stdin, termios.TCSADRAIN, settings)
         node.destroy_node()
         rclpy.shutdown()
 

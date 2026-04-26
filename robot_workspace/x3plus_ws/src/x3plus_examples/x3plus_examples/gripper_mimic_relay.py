@@ -1,20 +1,30 @@
 #!/usr/bin/env python3
 """
-Gripper Mimic Relay — Relays grip_joint position to the 5 linkage mimic joints.
+Gripper Mimic Joint State Filter
 
-In Gazebo (Ignition), URDF <mimic> tags are not enforced by the physics engine.
-This node subscribes to /joint_states, reads grip_joint, and republishes the
-mimic joint commands so the gripper linkage moves visually.
+Ignition Gazebo's JointStatePublisher emits physics positions for ALL joints,
+including the passive mimic finger joints (llink_joint1-3, rlink_joint2-3)
+which are frozen at 0 in physics (gravity disabled, no controller).
 
-Mimic joint mapping (from URDF):
-  rlink_joint2 : multiplier = -1  (mirrors grip_joint)
-  rlink_joint3 : multiplier =  1
-  llink_joint1 : multiplier = -1
-  llink_joint2 : multiplier =  1
-  llink_joint3 : multiplier = -1
+robot_state_publisher (RSP) in ROS2 honours URDF <mimic> tags ONLY when the
+mimic joint is NOT present in the incoming /joint_states message — if the joint
+is present it uses the value directly, bypassing the mimic computation.
 
-Usage:
-    ros2 run x3plus_examples gripper_mimic_relay
+This node:
+  - Subscribes to /joint_states_raw  (raw Ignition bridge output)
+  - Strips the 5 mimic joint entries from the message
+  - Republishes to /joint_states
+
+RSP then computes each mimic joint position from grip_joint via the URDF <mimic>
+relationship, so the fingers visually open/close correctly in RViz and Gazebo
+without any physics controller on the fragile (1e-7 kg.m²) finger links.
+
+Mimic multipliers (from URDF):
+  rlink_joint2  = grip_joint × -1
+  rlink_joint3  = grip_joint × +1
+  llink_joint1  = grip_joint × -1
+  llink_joint2  = grip_joint × +1
+  llink_joint3  = grip_joint × -1
 """
 
 import rclpy
@@ -22,41 +32,50 @@ from rclpy.node import Node
 from sensor_msgs.msg import JointState
 
 
-GRIP_JOINT = 'grip_joint'
-
-# {joint_name: multiplier}
+# Joint names that are pure kinematic followers — strip them so RSP computes
+# their positions via the URDF <mimic> relationship from grip_joint.
 MIMIC_JOINTS = {
-    'rlink_joint2': -1.0,
-    'rlink_joint3':  1.0,
-    'llink_joint1': -1.0,
-    'llink_joint2':  1.0,
-    'llink_joint3': -1.0,
+    'rlink_joint2',
+    'rlink_joint3',
+    'llink_joint1',
+    'llink_joint2',
+    'llink_joint3',
 }
 
 
 class GripperMimicRelay(Node):
-    """Republishes grip_joint position to all mimic gripper joints."""
-
     def __init__(self):
         super().__init__('gripper_mimic_relay')
 
-        self.pub = self.create_publisher(JointState, 'joint_states', 10)
+        self.pub = self.create_publisher(JointState, '/joint_states', 10)
+
         self.sub = self.create_subscription(
-            JointState, 'joint_states', self._cb, 10)
+            JointState,
+            '/joint_states_raw',
+            self._callback,
+            10,
+        )
 
-        self.get_logger().info('gripper_mimic_relay started')
+        self.get_logger().info(
+            'Gripper mimic relay active: /joint_states_raw → /joint_states '
+            f'(stripping {len(MIMIC_JOINTS)} mimic joints so RSP computes them via URDF)'
+        )
 
-    def _cb(self, msg: JointState):
-        if GRIP_JOINT not in msg.name:
-            return
-        idx = msg.name.index(GRIP_JOINT)
-        grip_pos = msg.position[idx] if msg.position else 0.0
-
+    def _callback(self, msg: JointState):
         out = JointState()
-        out.header.stamp = self.get_clock().now().to_msg()
-        for joint, mult in MIMIC_JOINTS.items():
-            out.name.append(joint)
-            out.position.append(grip_pos * mult)
+        out.header = msg.header
+
+        for i, name in enumerate(msg.name):
+            if name in MIMIC_JOINTS:
+                continue  # skip — RSP will compute from grip_joint via <mimic>
+            out.name.append(name)
+            if i < len(msg.position):
+                out.position.append(msg.position[i])
+            if i < len(msg.velocity):
+                out.velocity.append(msg.velocity[i])
+            if i < len(msg.effort):
+                out.effort.append(msg.effort[i])
+
         self.pub.publish(out)
 
 

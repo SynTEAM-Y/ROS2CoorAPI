@@ -155,13 +155,14 @@ After launching, verify the robot is properly simulated:
 ros2 topic list
 
 # Gazebo mode: you should see at minimum:
-# /joint_states       ← from Ignition JointStatePublisher via ros_gz_bridge (15 joints)
+# /joint_states_raw   ← from Ignition JointStatePublisher via ros_gz_bridge (18 joints)
+# /joint_states       ← from gripper_mimic_relay (13 joints; 5 mimic joints stripped)
 # /odom               ← from Ignition DiffDrive plugin via ros_gz_bridge
 # /imu                ← from Ignition IMU plugin via ros_gz_bridge
 # /cmd_vel            ← received by Ignition DiffDrive plugin
 # /clock              ← Ignition simulation clock
 # /robot_description  ← URDF string
-# /tf, /tf_static     ← robot TF tree
+# /tf, /tf_static     ← robot TF tree (5 mimic joints computed by RSP via URDF <mimic>)
 ```
 
 ### Monitor Joint States
@@ -422,24 +423,42 @@ The x3plus robot includes a **fully simulated 6-DOF robotic arm** with a paralle
 #### Architecture Overview
 
 **Arm Joints** (5 revolute joints):
-- `arm_joint1` through `arm_joint5` - Full 6-DOF arm control
-- PID-controlled with tuned gains (P=50, D=20, cmd_max=20)
-- Each joint independently controllable via `/arm_joint{N}_cmd_pos` topics
+- `arm_joint1` through `arm_joint5` — 5-DOF arm control
+- Each joint has an Ignition `JointPositionController` (PID) tuned per-joint:
+  - arm_joint1: P=15, D=2, cmd_max=8
+  - arm_joint2: P=25, D=3, cmd_max=15  (heaviest joint, takes shoulder load)
+  - arm_joint3: P=20, D=2.5, cmd_max=12
+  - arm_joint4: P=15, D=2, cmd_max=8
+  - arm_joint5: P=10, D=1.5, cmd_max=6
+- Each joint independently controllable via `/arm_joint{N}_cmd_pos` topics (std_msgs/Float64)
+- Joint damping=1.0, friction=0.5 in URDF so reaction torques don't shake the base
 
-**Gripper Mechanism** (6 links, 1 main control joint):
-- `grip_joint` - Main gripper control (range: -1.54 to 0 rad)
-  - 0 = closed, -1.54 = fully open
-  - PID tuned for crisp response (P=120, D=35, cmd_max=18)
-- **Parallel linkage**: 5 mimic joints automatically follow `grip_joint`
-  - `rlink_joint2`, `rlink_joint3` (right finger)
-  - `llink_joint1`, `llink_joint2`, `llink_joint3` (left finger)
-  - Handled automatically by `gripper_mimic_relay` node
+**Gripper Mechanism** (6 links, 1 actuated joint):
+- `grip_joint` — main gripper control (range: -1.54 to 0 rad)
+  - 0 = closed (servo center 90°), -1.54 = fully open (matches manufacturer SRDF)
+  - PID tuned for tiny inertia: P=200, D=5, cmd_max=100 N·m
+  - Joint damping=0.005, friction=0.001 (rlink1 has ~1e-7 kg.m² inertia; standard
+    arm-joint damping/friction over-damps it and the PID can't move it)
+- **Parallel linkage**: 5 mimic continuous joints follow `grip_joint` via the URDF `<mimic>` tag
+  - `rlink_joint2`, `rlink_joint3` (right finger; multipliers −1, +1)
+  - `llink_joint1`, `llink_joint2`, `llink_joint3` (left finger; −1, +1, −1)
+  - **No physics controller** — gravity disabled on these links so they don't flop
+  - **`gripper_mimic_relay`** strips them from `/joint_states_raw` so RSP computes them
+    via the URDF `<mimic>` relationship (RSP only honours `<mimic>` when the joint is
+    absent from the incoming JointState message).
 
-**Automatic Mimic Control**:
-- The `gripper_mimic_relay` node runs automatically with Gazebo
-- Reads actual `grip_joint` position from `/joint_states`
-- Publishes synchronized commands to all 5 linkage joints
-- Holds arm at zero for 3 seconds at startup to prevent gravity droop
+**How the mimic chain works**:
+```
+Ignition physics → /joint_states_raw  (18 joints, 5 mimic frozen at 0)
+                          ↓
+         gripper_mimic_relay  (strips 5 mimic joints)
+                          ↓
+                  /joint_states  (13 joints)
+                          ↓
+         robot_state_publisher
+                          ↓
+         TF tree  (mimic joint TFs computed from grip_joint via URDF)
+```
 
 #### Testing the Gripper
 
@@ -461,50 +480,41 @@ ros2 topic pub --once /grip_joint_cmd_pos std_msgs/msg/Float64 "{data: -0.77}"
 ros2 topic echo /joint_states | grep -E "grip_joint|rlink|llink"
 ```
 
-#### Gripper Performance Optimizations (✅ APPLIED)
+#### Gripper Performance Notes
 
-Recent improvements for better simulation performance:
+1. **Per-joint effort limits** (URDF `<limit effort>`):
+   - Arm joints: 100 N·m (revolute_joint macro)
+   - `grip_joint`: 100 N·m (inlined to allow lower damping)
+   - Mimic linkage joints: continuous, no effort limit (they're passive in physics)
 
-1. **Realistic Effort Limits**:
-   - `grip_joint`: 20 N⋅m (realistic for gripper actuator)
-   - Mimic joints: 5 N⋅m (appropriate for finger linkages)
-   - Previous: All joints had 100 N⋅m (unrealistic)
+2. **PID gains tuned to physics**:
+   - Arm joints: gains scaled to each joint's load (joint2 strongest, joint5 lightest)
+   - `grip_joint`: P=200, cmd_max=100 — high because rlink1 mass is only ~1.2 mg and
+     even slight ODE friction blocks motion if PID is too gentle
 
-2. **Tuned Velocity Limits**:
-   - Mimic joints: 2 rad/s (smooth, controlled motion)
-   - Previous: 5 rad/s (caused potential oscillations)
+3. **Finger collision**:
+   - All finger links (`rlink1–3`, `llink1–3`) have the standard collision meshes
+     from the URDF
+   - Gravity is **disabled** on these links so they don't drag down `arm_link5`
 
-3. **Optimized PID Gains**:
-   - `grip_joint`: P=120, cmd_max=18 (stays below effort limit)
-   - Mimic joints: P=25, cmd_max=3 (gentle control for small links)
+#### Object Grasping in Simulation
 
-4. **Optional Collision Geometry**:
-   - By default: Collision disabled (prevents overlap issues at spawn)
-   - **Enable grasping**: Set `collision_enabled:=true` in gripper_link macro
-   - Uses scaled collision meshes (80%) to prevent overlap
+The finger collision meshes are enabled by default (loaded by the `common_link`
+macro). Grasping behaviour in Ignition is limited because:
 
-#### Enabling Object Grasping
+  - The 5 mimic joints have **no physics controller** — they don't apply grip force
+    on objects, they only follow `grip_joint` kinematically (via RSP, not physics).
+  - `grip_joint` rotates `rlink1` only; the rest of the linkage is decoupled in physics.
 
-To enable the gripper to actually grasp objects in simulation:
+For true Gazebo grasping (force closure), you would need to either:
+  1. Enforce the mimic constraint via a physics joint loop closure (DART/ODE 4-bar
+     linkage) — attempted in an earlier revision but caused ODE instability with the
+     tiny finger inertias
+  2. Add JointPositionControllers to each mimic joint and command them in lock-step
+     with `grip_joint` (deprecated approach — caused the same instability)
 
-```bash
-# 1. Edit the URDF file
-code src/yahboomcar_description/urdf/yahboomcar_X3plus.urdf.xacro
-
-# 2. Find all gripper_link instantiations and add collision_enabled:=true
-# Example:
-#   <xacro:gripper_link name="rlink1" material="Green" path="X3plus" collision_enabled:=true>
-
-# 3. Rebuild
-cd ~/ROS2Coordination/robot_workspace/x3plus_ws
-colcon build --packages-select yahboomcar_description
-source install/setup.bash
-
-# 4. Test with objects in Gazebo
-ros2 launch sim_gazebo_bringup gazebo.launch.py
-```
-
-**Note**: Enabling collision may cause slight position shifts at spawn due to mesh overlap. The collision geometry is automatically scaled to 80% to minimize this effect.
+The current setup is optimised for **visual** pick-and-place (RViz + Gazebo),
+not physical grasp force.
 
 #### MoveIt Integration
 

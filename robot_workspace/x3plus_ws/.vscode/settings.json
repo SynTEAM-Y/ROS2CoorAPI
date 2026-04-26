@@ -1,0 +1,45 @@
+{
+    "ROS2.distro": "humble",
+    "python.autoComplete.extraPaths": [
+        "/home/othman/ROS2CoorAPI/robot_workspace/x3plus_ws/build/yahboomcar_description",
+        "/home/othman/ROS2CoorAPI/robot_workspace/x3plus_ws/install/yahboomcar_description/lib/python3.10/site-packages",
+        "/home/othman/ROS2CoorAPI/robot_workspace/x3plus_ws/build/x3plus_sim_bringup",
+        "/home/othman/ROS2CoorAPI/robot_workspace/x3plus_ws/install/x3plus_sim_bringup/lib/python3.10/site-packages",
+        "/home/othman/ROS2CoorAPI/robot_workspace/x3plus_ws/build/x3plus_multi_bringup",
+        "/home/othman/ROS2CoorAPI/robot_workspace/x3plus_ws/install/x3plus_multi_bringup/lib/python3.10/site-packages",
+        "/home/othman/ROS2CoorAPI/robot_workspace/x3plus_ws/build/x3plus_examples",
+        "/home/othman/ROS2CoorAPI/robot_workspace/x3plus_ws/install/x3plus_examples/lib/python3.10/site-packages",
+        "/opt/ros/humble/lib/python3.10/site-packages",
+        "/opt/ros/humble/local/lib/python3.10/dist-packages"
+    ],
+    "python.analysis.extraPaths": [
+        "/home/othman/ROS2CoorAPI/robot_workspace/x3plus_ws/build/yahboomcar_description",
+        "/home/othman/ROS2CoorAPI/robot_workspace/x3plus_ws/install/yahboomcar_description/lib/python3.10/site-packages",
+        "/home/othman/ROS2CoorAPI/robot_workspace/x3plus_ws/build/x3plus_sim_bringup",
+        "/home/othman/ROS2CoorAPI/robot_workspace/x3plus_ws/install/x3plus_sim_bringup/lib/python3.10/site-packages",
+        "/home/othman/ROS2CoorAPI/robot_workspace/x3plus_ws/build/x3plus_multi_bringup",
+        "/home/othman/ROS2CoorAPI/robot_workspace/x3plus_ws/install/x3plus_multi_bringup/lib/python3.10/site-packages",
+        "/home/othman/ROS2CoorAPI/robot_workspace/x3plus_ws/build/x3plus_examples",
+        "/home/othman/ROS2CoorAPI/robot_workspace/x3plus_ws/install/x3plus_examples/lib/python3.10/site-packages",
+        "/opt/ros/humble/lib/python3.10/site-packages",
+        "/opt/ros/humble/local/lib/python3.10/dist-packages"
+    ],
+    "chat.tools.terminal.autoApprove": {
+        "/^source install/setup\\.bash && ros2 launch sim_gazebo_bringup --show-args robot_rviz\\.launch\\.py 2>&1 \\| head -40$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^source install/setup\\.bash && ros2 launch --show-args sim_gazebo_bringup robot_rviz\\.launch\\.py$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^source install/setup\\.bash && ros2 launch --show-args sim_gazebo_bringup gazebo\\.launch\\.py$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^pkill -9 -f \"ign gazebo\\|gz sim\\|robot_state_publisher\\|joint_state_publisher\\|rviz2\\|diff_drive\\|arm_controller\\|create\" 2>/dev/null; sleep 1 && source install/setup\\.bash && ros2 launch sim_gazebo_bringup gazebo\\.launch\\.py 2>&1 \\| head -25$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
+    }
+}

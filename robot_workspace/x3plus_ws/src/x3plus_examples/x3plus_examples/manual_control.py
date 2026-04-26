@@ -70,7 +70,7 @@ class DifferentialDriveControl(Node):
         self.wheel_radius = 0.04      # Radius of each wheel (m)
         
         # Speed limits
-        self.max_linear_velocity = 0.3   # Maximum forward/backward speed (m/s)
+        self.max_linear_velocity = 0.8   # Maximum forward/backward speed (m/s)
         self.max_angular_velocity = 1.0  # Maximum rotation speed (rad/s)
         
         # Turn speed (used for 90° turns)

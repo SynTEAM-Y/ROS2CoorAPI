@@ -448,11 +448,3 @@ ros2 topic echo /joint_states
 | Wheel spinning wrong direction | Check axis definition (0 1 0 for Y-axis rotation) |
 | Gazebo crash on startup | Verify plugin filename: `ignition-gazebo-diff-drive-system` |
 
-## Next Steps
-
-1. **Add Caster Wheel** - Small wheel in front/back for balance
-2. **Implement ROS 2 Control** - Use ros2_control framework for advanced control
-3. **Add IMU Odometry** - Combine IMU + wheel odometry for better localization
-4. **Implement Nav2** - Use Nav2 stack for autonomous navigation
-
-Happy robotics! 🤖

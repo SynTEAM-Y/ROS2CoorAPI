@@ -64,22 +64,29 @@ This ensures **all plugins** are preserved and loaded by Ignition.
 
 ---
 
-### 4. ✅ Gripper Mimic Joint Relay
+### 4. ✅ Gripper Mimic Joint Filter
 
-**Problem**: Ignition Gazebo does NOT enforce URDF `<mimic>` tags. The 5 gripper
-linkage joints (rlink_joint2/3, llink_joint1/2/3) would stay static when grip_joint moved.
+**Problem**: Ignition Gazebo does NOT enforce URDF `<mimic>` tags. Its `JointStatePublisher`
+plugin emits physics positions for the 5 finger linkage joints (rlink_joint2/3,
+llink_joint1/2/3) which are frozen at 0 (no controller, gravity disabled). When `robot_state_publisher` (RSP) sees a mimic joint in `/joint_states`, it uses that
+value directly and **bypasses** the URDF `<mimic>` computation — so the fingers
+stay frozen visually.
 
-**Solution**: `gripper_mimic_relay` node (in `x3plus_examples`) subscribes to
-`/joint_states`, reads the `grip_joint` position, and publishes position commands
-to all 5 mimic joints via dedicated ROS2→Ignition bridged topics.
+**Solution**: `gripper_mimic_relay` node (in `x3plus_examples`):
+  - Subscribes to `/joint_states_raw` (raw Ignition bridge output)
+  - **Strips** the 5 mimic joint entries from the message
+  - Republishes the filtered `JointState` on `/joint_states`
+
+Since the mimic joints are absent, RSP honours the URDF `<mimic>` tag and computes
+finger positions from `grip_joint` (multipliers ±1). No per-joint controllers, no
+bridged `/rlink_joint*_cmd_pos` topics.
 
 ```
-Bridged topics:
-  /rlink_joint2_cmd_pos  → ignition.msgs.Double
-  /rlink_joint3_cmd_pos  → ignition.msgs.Double
-  /llink_joint1_cmd_pos  → ignition.msgs.Double
-  /llink_joint2_cmd_pos  → ignition.msgs.Double
-  /llink_joint3_cmd_pos  → ignition.msgs.Double
+Ignition JointStatePublisher → ros_gz_bridge → /joint_states_raw
+         ↓
+  gripper_mimic_relay  (strips 5 mimic joints)
+         ↓
+  /joint_states  →  robot_state_publisher  (computes mimic via URDF)
 ```
 
 ---
@@ -87,10 +94,11 @@ Bridged topics:
 ### 5. ✅ Joint States from Ignition (NOT joint_state_publisher)
 
 In Gazebo mode, joint states come from **Ignition's JointStatePublisher plugin** via
-`ros_gz_bridge` — **not** from the ROS `joint_state_publisher` package. Adding a
-separate `joint_state_publisher` node would conflict and corrupt robot_state_publisher's TF.
+`ros_gz_bridge`. The bridge publishes to `/joint_states_raw`; the `gripper_mimic_relay`
+node then forwards the filtered message to `/joint_states`. **Do not** add the ROS
+`joint_state_publisher` package — it would conflict and corrupt RSP's TF.
 
-All 15 joints reported: 4 wheels + 5 arm + 1 gripper + 5 mimic linkage.
+Ignition emits 18 joints: 4 wheels + 5 arm + 1 gripper + 5 mimic linkage + 1 mono camera + 2 base/laser. After the relay strips the 5 mimic joints, `/joint_states` contains 13 joints; RSP computes the missing 5 mimic positions from `grip_joint` via the URDF `<mimic>` tag.
 
 ---
 
@@ -180,7 +188,7 @@ ros2 run x3plus_examples manual_control
 | `x3plus_examples/setup.py` | EDIT | Add entry points for all new nodes | ✅ Updated |
 | `sim_gazebo_bringup/RVIZ_ARM_FIX_AND_90TURN_FORMULA.md` | NEW | Detailed documentation | ✅ Created |
 | `sim_gazebo_bringup/90DEGREE_TURN_FORMULA.md` | NEW | Formula reference | ✅ Created |
-| `sim_gazebo_bringup/ODOMETRY_CALCULATION.md` | NEW | Odometry math and method | ✅ Created |
+| `sim_gazebo_bringup/README.md` (Odometry section) | UPDATED | Odometry math and method | ✅ Inline |
 
 ---
 
@@ -236,8 +244,8 @@ time estimate). The commanded angular.z is lower because the PID + friction comb
 ### Keyboard Controls
 ```
 Movement:
-  W    - Forward (0.3 m/s)
-  S    - Backward (-0.3 m/s)
+  W    - Forward (0.8 m/s)
+  S    - Backward (-0.8 m/s)
   A    - Rotate left (1.0 rad/s)
   D    - Rotate right (-1.0 rad/s)
   SPACE- Stop
@@ -290,7 +298,7 @@ Edit `manual_control.py` to adjust:
 # Robot wheel configuration
 self.wheel_separation = 0.2128  # m (distance between wheels)
 self.wheel_radius = 0.04      # m (wheel radius)
-self.max_linear_velocity = 0.3   # Max forward speed (m/s)
+self.max_linear_velocity = 0.8   # Max forward speed (m/s)
 self.max_angular_velocity = 1.0  # Max rotation speed (rad/s)
 self.turn_wheel_speed = 0.5  # Speed used in theoretical formula (m/s)
 ```

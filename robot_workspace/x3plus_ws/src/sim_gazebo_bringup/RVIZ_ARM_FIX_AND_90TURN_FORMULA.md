@@ -38,7 +38,7 @@
 - **Arm Initial Pose**:
   - arm_joint1: 0 rad (horizontal)
   - arm_joint2-5: 0 rad (neutral position)
-  - Gripper joints: -π/2 rad (slightly open)
+  - Gripper joint: 0 rad (closed)
 
 ### How to Verify Arm Visualization
 
@@ -136,8 +136,8 @@ When the robot turns while moving forward:
 1. **Interactive Keyboard Control**
    ```
    Basic Movement:
-     W/w  → Forward (0.3 m/s)
-     S/s  → Backward (-0.3 m/s)
+     W/w  → Forward (0.8 m/s)
+     S/s  → Backward (-0.8 m/s)
      A/a  → Rotate left (1.0 rad/s)
      D/d  → Rotate right (-1.0 rad/s)
      Space→ Stop
@@ -232,7 +232,7 @@ Edit the `__init__` method in `manual_control.py` to customize:
 # ============ ROBOT CONFIGURATION ============
 self.wheel_separation    = 0.2128  # Distance between wheel pairs (m)  ← matches URDF
 self.wheel_radius        = 0.04    # Wheel radius (m)                   ← matches URDF
-self.max_linear_velocity = 0.3     # Max forward/backward speed (m/s)
+self.max_linear_velocity = 0.8     # Max forward/backward speed (m/s)
 self.max_angular_velocity= 1.0     # Max rotation speed for A/D keys (rad/s)
 self.turn_wheel_speed    = 0.5     # v in theoretical formula (m/s)
 ```
@@ -286,9 +286,9 @@ $$t = \frac{\pi \times 0.2128}{4 \times 0.8} = 0.157 \text{ sec}$$ (faster!)
 | Poor arm joint display | Update all RViz settings | `robot_rviz.launch.py` | ✅ Fixed |
 | No 90° turn capability | Auto-calculate formula + closed-loop | `manual_control.py` | ✅ Created |
 | No manual control node | New keyboard teleop | `x3plus_examples/setup.py` | ✅ Added |
-| Gripper mimic joints static | `gripper_mimic_relay` node | `x3plus_examples` | ✅ Added |
+| Gripper mimic joints static | `gripper_mimic_relay` filter (strips mimic joints from `/joint_states`) | `x3plus_examples` | ✅ Added |
 | Plugins dropped at spawn | URDF→SDF pre-conversion (`ign sdf -p`) | `gazebo.launch.py` | ✅ Fixed |
-| Odometry undocumented | Full math reference | `ODOMETRY_CALCULATION.md` | ✅ Added |
+| Odometry undocumented | Full math reference | `README.md` (Odometry section) | ✅ Inline |
 
 ---
 

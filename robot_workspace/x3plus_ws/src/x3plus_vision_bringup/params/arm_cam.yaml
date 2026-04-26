@@ -1,8 +1,0 @@
-arm_cam:
-  ros__parameters:
-    # Defaults
-    video_device: "/dev/v4l/by-id/usb-Sonix_Technology_Co.__Ltd._USB_2.0_Camera-video-index0"
-    image_size: [640, 480]         # <-- int[]
-    time_per_frame: [1, 30]        # <-- int[]  (numerator/denominator = 1/fps)
-    pixel_format: "YUYV"           # "YUYV" for this camera, or "MJPG" if the other index supports it
-    camera_frame_id: "arm_cam_frame"

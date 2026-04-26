@@ -1,6 +1,0 @@
-move_group:
-  ros__parameters:
-    planning_pipelines:
-      - ompl
-    default_planning_pipeline: ompl
-    planning_plugin: ompl_interface/OMPLPlanner

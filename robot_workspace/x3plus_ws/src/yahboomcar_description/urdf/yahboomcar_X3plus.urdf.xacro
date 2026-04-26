@@ -21,10 +21,7 @@
     <!-- Default: empty string (no namespace prefix) for single robot -->
     <!-- Usage: xacro file.xacro ns:=robot1/ (for multi-robot with slash at end) -->
     <xacro:arg name="ns" default=""/>  <!-- Default empty namespace -->
-    <!-- Helper wheel cylinders are useful for debugging wheel kinematics, but can clutter RViz. -->
-    <xacro:arg name="show_helper_wheels" default="false"/>
     <xacro:property name="ns" value="$(arg ns)"/>
-    <xacro:property name="show_helper_wheels" value="$(arg show_helper_wheels)"/>
     <link name="base_footprint"/>
     <link name="imu_link"/>
     <!-- common link-->
@@ -53,7 +50,10 @@
             <child link="${ns}/${child}"/>
             <origin xyz="${xyz}" rpy="${rpy}"/>
             <axis xyz="0 0 ${axisZ}"/>
-            <limit lower="${lower}" upper="${upper}" effort="100" velocity="1"/>
+            <limit lower="${lower}" upper="${upper}" effort="100" velocity="3"/>
+            <!-- Damping/friction added so arm joints absorb their own motion reactions
+                 instead of jerking the base around in Gazebo. -->
+            <dynamics damping="1.0" friction="0.5"/>
         </joint>
     </xacro:macro>
 
@@ -65,6 +65,9 @@
             <origin xyz="${xyz}" rpy="${rpy}"/>
             <axis xyz="0 0 1"/>
             <mimic joint="${ns}/grip_joint" multiplier="${mimic}"/>
+            <!-- High damping/friction: Ignition does not enforce <mimic>, so without this
+                 the tiny finger links spin freely from any vibration ("insect-like" motion). -->
+            <dynamics damping="5.0" friction="5.0"/>
         </joint>
     </xacro:macro>
 
@@ -94,17 +97,15 @@
                 <origin xyz="0 0 0" rpy="0 0 0"/>
                 <inertia ixx="0.000067" ixy="0" ixz="0" iyy="0.000067" iyz="0" izz="0.000032"/>
             </inertial>
-            <xacro:if value="${show_helper_wheels}">
-                <visual>
-                    <geometry>
-                        <!-- WHEEL RADIUS: Change 0.04 to your wheel radius in meters -->
-                        <!-- WHEEL WIDTH: Change 0.015 to your wheel width/thickness in meters -->
-                        <cylinder radius="0.04" length="0.015"/>
-                    </geometry>
-                    <origin xyz="0 0 0" rpy="1.5707 0 0"/>
-                    <material name="Black"/>
-                </visual>
-            </xacro:if>
+            <visual>
+                <geometry>
+                    <!-- WHEEL RADIUS: Change 0.04 to your wheel radius in meters -->
+                    <!-- WHEEL WIDTH: Change 0.015 to your wheel width/thickness in meters -->
+                    <cylinder radius="0.04" length="0.015"/>
+                </geometry>
+                <origin xyz="0 0 0" rpy="1.5707 0 0"/>
+                <material name="Black"/>
+            </visual>
             <collision>
                 <geometry>
                     <!-- WHEEL RADIUS: Must match visual radius above -->
@@ -139,57 +140,77 @@
     <xacro:common_link name="base_link" material="Green" path="X3plus">
         <inertial>
             <origin xyz="-0.0304416859098744 4.23384368655101E-05 0.0448234503408059" rpy="0 0 0"/>
-            <mass value="1.0754239466482"/>
+            <!-- Increased from 1.075 kg to 4.0 kg. The original CAD inertia was for the
+                 chassis shell only; the real robot with battery + electronics is ~3-4 kg.
+                 A heavier base resists arm-reaction torques so the robot stays put. -->
+            <mass value="4.0"/>
             <inertia
-                    ixx="0.0208831789264125"
+                    ixx="0.078"
                     ixy="2.4618093127858E-06"
-                    ixz="0.00616019290028669"
-                    iyy="0.0265621377486244"
+                    ixz="0.0229"
+                    iyy="0.0988"
                     iyz="-1.10079499865282E-06"
-                    izz="0.0129535610833954"/>
+                    izz="0.0482"/>
         </inertial>
     </xacro:common_link>
     <xacro:fixed_joint name="base_joint" parent="base_footprint" child="base_link" xyz="0.0 0.0 0.076" rpy="0 0 0"/>
     <xacro:fixed_joint name="base_imu" parent="base_link" child="imu_link" xyz="0.001 0.017 0.0322" rpy="0 3.1415 1.5707"/>
 
-    <!-- ==================== DIFFERENTIAL DRIVE WHEELS ==================== -->
+    <!-- ==================== 4-WHEEL DRIVE WITH STEPPER MOTORS ==================== -->
     <!-- CONFIGURABLE: Wheel Mass (kg). Default 0.1 = 100 grams each wheel -->
     <!-- Change for heavier/lighter wheels. More mass = better traction but slower acceleration -->
-    <xacro:wheel_link name="left_wheel" mass="0.1"/>
-    <xacro:wheel_link name="right_wheel" mass="0.1"/>
+    <xacro:wheel_link name="front_left_wheel" mass="0.1"/>
+    <xacro:wheel_link name="front_right_wheel" mass="0.1"/>
+    <xacro:wheel_link name="back_left_wheel" mass="0.1"/>
+    <xacro:wheel_link name="back_right_wheel" mass="0.1"/>
 
-    <!-- CONFIGURABLE: Wheel Positions (forward/backward from base center) -->
-    <!-- Left wheel: x_pos=0.05 (5cm forward), y_pos=0.08 (8cm to the left) -->
-    <!-- Right wheel: x_pos=0.05 (5cm forward), y_pos=-0.08 (8cm to the right) -->
-    <!-- ADJUST x_pos TO MOVE WHEELS FORWARD/BACKWARD -->
-    <!-- ADJUST y_pos TO CHANGE DISTANCE BETWEEN WHEELS (wheel_separation) -->
-    <xacro:wheel_joint name="left_wheel_joint" parent="base_link" child="left_wheel" x_pos="0.05" y_pos="0.08"/>
-    <xacro:wheel_joint name="right_wheel_joint" parent="base_link" child="right_wheel" x_pos="0.05" y_pos="-0.08"/>
+    <!-- CONFIGURABLE: Wheel Positions (4-wheel configuration) -->
+    <!-- Front wheels: x_pos=0.05 (5cm forward - matches original 2-wheel position) -->
+    <!-- Back wheels: x_pos=-0.08 (8cm backward from center) -->
+    <!-- Left wheels: y_pos=0.08 (8cm to the left) -->
+    <!-- Right wheels: y_pos=-0.08 (8cm to the right) -->
+    <!-- Total wheelbase: 13cm, track width: 16cm -->
+    <xacro:wheel_joint name="front_left_wheel_joint" parent="base_link" child="front_left_wheel" x_pos="0.1054" y_pos="0.1064"/>
+    <xacro:wheel_joint name="front_right_wheel_joint" parent="base_link" child="front_right_wheel" x_pos="0.1054" y_pos="-0.1064"/>
+    <xacro:wheel_joint name="back_left_wheel_joint" parent="base_link" child="back_left_wheel" x_pos="-0.1146" y_pos="0.1064"/>
+    <xacro:wheel_joint name="back_right_wheel_joint" parent="base_link" child="back_right_wheel" x_pos="-0.1146" y_pos="-0.1064"/>
 
-    <!-- GAZEBO FRICTION PROPERTIES FOR WHEELS -->
+    <!-- GAZEBO FRICTION PROPERTIES FOR ALL 4 WHEELS -->
     <!-- mu1, mu2: Friction coefficients (0.0-1.0+). Higher = more grip. 0.8 is typical rubber on floor -->
     <!-- kp, kd: Contact stiffness and damping. Higher kp = stiffer contact, better for rigid wheels -->
-    <gazebo reference="left_wheel">
+    <gazebo reference="front_left_wheel">
         <material>Gazebo/Black</material>
-        <!-- FRICTION: mu1 and mu2 control grip. 0.8 is good for rubber wheels on normal floor -->
-        <mu1>0.8</mu1>
-        <mu2>0.8</mu2>
-        <!-- CONTACT STIFFNESS: kp controls how rigid the wheel contact is -->
+        <mu1>1.5</mu1>
+        <mu2>1.5</mu2>
         <kp>1000000.0</kp>
         <kd>1.0</kd>
     </gazebo>
 
-    <gazebo reference="right_wheel">
+    <gazebo reference="front_right_wheel">
         <material>Gazebo/Black</material>
-        <!-- FRICTION: mu1 and mu2 control grip. 0.8 is good for rubber wheels on normal floor -->
-        <mu1>0.8</mu1>
-        <mu2>0.8</mu2>
-        <!-- CONTACT STIFFNESS: kp controls how rigid the wheel contact is -->
+        <mu1>1.5</mu1>
+        <mu2>1.5</mu2>
         <kp>1000000.0</kp>
         <kd>1.0</kd>
     </gazebo>
 
-    <xacro:common_link name="laser_link" material="White" path="sensor_X3plus">
+    <gazebo reference="back_left_wheel">
+        <material>Gazebo/Black</material>
+        <mu1>1.5</mu1>
+        <mu2>1.5</mu2>
+        <kp>1000000.0</kp>
+        <kd>1.0</kd>
+    </gazebo>
+
+    <gazebo reference="back_right_wheel">
+        <material>Gazebo/Black</material>
+        <mu1>1.5</mu1>
+        <mu2>1.5</mu2>
+        <kp>1000000.0</kp>
+        <kd>1.0</kd>
+    </gazebo>
+
+    <xacro:common_link name="laser_link" material="DarkGray" path="sensor_X3plus">
         <inertial>
             <origin xyz="-0.0176558922685589 0.000671805271544437 0.0219302095894866" rpy="0 0 0"/>
             <mass value="0.0483909504209895"/>
@@ -198,7 +219,8 @@
         </inertial>
     </xacro:common_link>
     <xacro:fixed_joint name="laser_joint" parent="base_link" child="laser_link" xyz="0.10478 0 0.0471" rpy="0 0 0"/>
-    <xacro:common_link name="camera_link" material="White" path="sensor_X3plus">
+    
+    <xacro:common_link name="camera_link" material="DarkGray" path="sensor_X3plus">
         <inertial>
             <origin xyz="0 0 0" rpy="0 0 0"/>
             <mass value="0"/>
@@ -207,7 +229,7 @@
     </xacro:common_link>
     <xacro:fixed_joint name="camera_joint" parent="base_link" child="camera_link" xyz="-0.043645 0 0.41955" rpy="0 0 0"/>
 
-    <xacro:common_link name="arm_link1" material="White" path="X3plus">
+    <xacro:common_link name="arm_link1" material="DarkGray" path="X3plus">
         <inertial>
             <origin xyz="1.99179507982521E-05 -5.98354652829568E-05 0.0114289358828097" rpy="0 0 0"/>
             <mass value="0.0279545499871709"/>
@@ -237,7 +259,7 @@
     </xacro:common_link>
     <xacro:revolute_joint name="arm_joint2" parent="arm_link1" child="arm_link2" xyz="0 0 0.0405"
                     rpy="-${pi/2} 0 0" axisZ="-1" lower="-${pi/2}" upper="${pi/2}"/>
-    <xacro:common_link name="arm_link3" material="White" path="X3plus">
+    <xacro:common_link name="arm_link3" material="DarkGray" path="X3plus">
         <inertial>
             <origin xyz="0.024903 -0.0022634 -0.0013962" rpy="0 0 0"/>
             <mass value="0.031605"/>
@@ -267,7 +289,7 @@
     </xacro:common_link>
     <xacro:revolute_joint name="arm_joint4" parent="arm_link3" child="arm_link4" xyz="0 -0.0829 0" rpy="0 0 0"
                     axisZ="-1" lower="-${pi/2}" upper="${pi/2}"/>
-    <xacro:common_link name="arm_link5" material="White" path="X3plus">
+    <xacro:common_link name="arm_link5" material="Red" path="X3plus">
         <inertial>
             <origin xyz="0.0023228 0.018169 0.028684" rpy="0 0 0"/>
             <mass value="0.04069"/>
@@ -296,8 +318,18 @@
                     izz="1.99277285249309E-07"/>
         </inertial>
     </xacro:common_link>
-    <xacro:revolute_joint name="grip_joint" parent="arm_link5" child="rlink1" xyz="-0.0035 -0.012625 -0.0685"
-                    rpy="0 -${pi/2} 0" axisZ="1" lower="-${pi/2}" upper="0"/>
+    <!-- grip_joint: inlined (NOT using revolute_joint macro) so we can apply
+         very low damping/friction. The driven link rlink1 has tiny inertia
+         (~1e-7 kg.m²); the macro's damping=1.0/friction=0.5 over-damps it and
+         the PID controller cannot move the joint. -->
+    <joint name="${ns}/grip_joint" type="revolute">
+        <parent link="${ns}/arm_link5"/>
+        <child link="${ns}/rlink1"/>
+        <origin xyz="-0.0035 -0.012625 -0.0685" rpy="0 -${pi/2} 0"/>
+        <axis xyz="0 0 1"/>
+        <limit lower="-${pi/2}" upper="0" effort="100" velocity="5"/>
+        <dynamics damping="0.005" friction="0.001"/>
+    </joint>
     <xacro:common_link name="rlink2" material="Green" path="X3plus">
         <inertial>
             <origin xyz="0.021158 0.0063295 -0.0030251" rpy="0 0 0"/>
@@ -364,7 +396,7 @@
     <xacro:continuous_joint name="llink_joint3" parent="arm_link5" child="llink3" xyz="-0.0035 0.0045 -0.0505"
                       rpy="0 -${pi/2} 0" mimic="-1"/>
 
-    <xacro:common_link name="mono_link" material="White" path="sensor_X3plus">
+    <xacro:common_link name="mono_link" material="DarkGray" path="sensor_X3plus">
         <inertial>
             <origin xyz="5.8458E-05 0.0095015 -0.0014824" rpy="0 0 0"/>
             <mass value="0.0097589"/>
@@ -372,7 +404,7 @@
                      izz="2.5696E-06"/>
         </inertial>
     </xacro:common_link>
-    <xacro:fixed_joint name="mono_joint" parent="arm_link4" child="mono_link" xyz="0.0481 -0.05145 -0.0022"
+    <xacro:fixed_joint name="mono_joint" parent="arm_link4" child="mono_link" xyz="-0.0481 -0.05145 -0.0022"
                  rpy="${pi/2} 0 0"/>
 
     <!-- ==================== ARM INITIAL POSITIONS FOR GAZEBO ==================== -->
@@ -398,50 +430,136 @@
         <initial_position>0</initial_position>
     </gazebo>
 
-    <!-- ==================== GAZEBO DIFFERENTIAL DRIVE PLUGIN ==================== -->
-    <!-- This plugin controls the wheels for differential drive (tank-style) movement -->
-    <!-- CONFIGURABLE PARAMETERS BELOW: -->
-    <!-- NOTE: Plugin must be linked to base_link for proper operation -->
+    <!-- ==================== ARM JOINT POSITION CONTROLLERS (IGNITION) ==================== -->
+    <!-- Without these, gravity makes the arm collapse on spawn.                            -->
+    <!-- Each JointPositionController is a PID that holds the joint at a commanded angle.  -->
+    <!-- Commands come in as ignition.msgs.Double on /<joint>_cmd_pos and are bridged from -->
+    <!-- ROS std_msgs/Float64 topics published by the existing arm_controller node.        -->
+    <gazebo>
+        <plugin filename="ignition-gazebo-joint-position-controller-system"
+                name="ignition::gazebo::systems::JointPositionController">
+            <joint_name>arm_joint1</joint_name>
+            <topic>/arm_joint1_cmd_pos</topic>
+            <p_gain>15</p_gain> <i_gain>0.3</i_gain> <d_gain>2</d_gain>
+            <i_max>3</i_max> <i_min>-3</i_min>
+            <cmd_max>8</cmd_max> <cmd_min>-8</cmd_min>
+            <initial_position>0</initial_position>
+        </plugin>
+        <plugin filename="ignition-gazebo-joint-position-controller-system"
+                name="ignition::gazebo::systems::JointPositionController">
+            <joint_name>arm_joint2</joint_name>
+            <topic>/arm_joint2_cmd_pos</topic>
+            <p_gain>25</p_gain> <i_gain>0.5</i_gain> <d_gain>3</d_gain>
+            <i_max>5</i_max> <i_min>-5</i_min>
+            <cmd_max>15</cmd_max> <cmd_min>-15</cmd_min>
+            <initial_position>0</initial_position>
+        </plugin>
+        <plugin filename="ignition-gazebo-joint-position-controller-system"
+                name="ignition::gazebo::systems::JointPositionController">
+            <joint_name>arm_joint3</joint_name>
+            <topic>/arm_joint3_cmd_pos</topic>
+            <p_gain>20</p_gain> <i_gain>0.4</i_gain> <d_gain>2.5</d_gain>
+            <i_max>4</i_max> <i_min>-4</i_min>
+            <cmd_max>12</cmd_max> <cmd_min>-12</cmd_min>
+            <initial_position>0</initial_position>
+        </plugin>
+        <plugin filename="ignition-gazebo-joint-position-controller-system"
+                name="ignition::gazebo::systems::JointPositionController">
+            <joint_name>arm_joint4</joint_name>
+            <topic>/arm_joint4_cmd_pos</topic>
+            <p_gain>15</p_gain> <i_gain>0.3</i_gain> <d_gain>2</d_gain>
+            <i_max>3</i_max> <i_min>-3</i_min>
+            <cmd_max>8</cmd_max> <cmd_min>-8</cmd_min>
+            <initial_position>0</initial_position>
+        </plugin>
+        <plugin filename="ignition-gazebo-joint-position-controller-system"
+                name="ignition::gazebo::systems::JointPositionController">
+            <joint_name>arm_joint5</joint_name>
+            <topic>/arm_joint5_cmd_pos</topic>
+            <p_gain>10</p_gain> <i_gain>0.2</i_gain> <d_gain>1.5</d_gain>
+            <i_max>2</i_max> <i_min>-2</i_min>
+            <cmd_max>6</cmd_max> <cmd_min>-6</cmd_min>
+            <initial_position>0</initial_position>
+        </plugin>
+        <plugin filename="ignition-gazebo-joint-position-controller-system"
+                name="ignition::gazebo::systems::JointPositionController">
+            <joint_name>grip_joint</joint_name>
+            <topic>/grip_joint_cmd_pos</topic>
+            <p_gain>200</p_gain> <i_gain>2.0</i_gain> <d_gain>5</d_gain>
+            <i_max>10</i_max> <i_min>-10</i_min>
+            <cmd_max>100</cmd_max> <cmd_min>-100</cmd_min>
+            <initial_position>0</initial_position>
+        </plugin>
+        <!-- NOTE: Mimic gripper finger joints (llink_joint1..3, rlink_joint2..3) have
+             ~1e-7 kg.m^2 inertia which destabilises ODE/DART under any applied torque.
+             We do NOT install JointPositionControllers on them. Gravity is disabled on
+             the finger links below, so with no applied torque they remain at their
+             URDF spawn pose. The gripper closure is purely visual via grip_joint;
+             the finger meshes track via the URDF mimic tag in robot_state_publisher. -->
+        <!-- ==================== IGNITION DIFFERENTIAL DRIVE ==================== -->
+        <!-- Replaces the Gazebo-Classic libgazebo_ros_diff_drive.so plugin which is
+             not loadable in Ignition Gazebo. Listens on /cmd_vel and publishes /odom + TF.
+             Only the FRONT wheels are driven; the back wheels roll passively to avoid
+             over-constraining the rigid base (driving all four caused ODE AABB asserts). -->
+        <plugin filename="ignition-gazebo-diff-drive-system"
+                name="ignition::gazebo::systems::DiffDrive">
+            <left_joint>front_left_wheel_joint</left_joint>
+            <right_joint>front_right_wheel_joint</right_joint>
+            <wheel_separation>0.16</wheel_separation>
+            <wheel_radius>0.04</wheel_radius>
+            <max_linear_acceleration>3.0</max_linear_acceleration>
+            <max_angular_acceleration>3.0</max_angular_acceleration>
+            <max_linear_velocity>1.5</max_linear_velocity>
+            <max_angular_velocity>3.0</max_angular_velocity>
+            <topic>/cmd_vel</topic>
+            <odom_topic>/odom</odom_topic>
+            <tf_topic>/tf</tf_topic>
+            <frame_id>odom</frame_id>
+            <child_frame_id>base_footprint</child_frame_id>
+            <odom_publish_frequency>30</odom_publish_frequency>
+        </plugin>
+        <!-- Publishes the actual joint positions from the physics engine so the bridge
+             can forward them to ROS /joint_states (replacing the static publisher).      -->
+        <plugin filename="ignition-gazebo-joint-state-publisher-system"
+                name="ignition::gazebo::systems::JointStatePublisher">
+            <update_rate>200</update_rate>
+        </plugin>
+    </gazebo>
+
+    <!-- Disable gravity on the passive mimic gripper links so they do not flop in Gazebo.
+         Mimic constraints are not enforced by Ignition physics, but with gravity off
+         these links remain at their spawn pose instead of falling free.                  -->
+    <gazebo reference="llink1"><gravity>0</gravity></gazebo>
+    <gazebo reference="llink2"><gravity>0</gravity></gazebo>
+    <gazebo reference="llink3"><gravity>0</gravity></gazebo>
+    <gazebo reference="rlink1"><gravity>0</gravity></gazebo>
+    <gazebo reference="rlink2"><gravity>0</gravity></gazebo>
+    <gazebo reference="rlink3"><gravity>0</gravity></gazebo>
+
+
+    <!-- ==================== LEGACY GAZEBO CLASSIC DIFF DRIVE (DISABLED) ==================== -->
+    <!-- The old Gazebo Classic libgazebo_ros_diff_drive.so plugin is not loadable in
+         Ignition Gazebo. The active wheel controller is the ignition-gazebo-diff-drive-system
+         plugin declared in the model-level <gazebo> block above. The XML below is
+         intentionally kept as a comment for reference only. -->
+    <!--
     <gazebo reference="base_link">
         <plugin name="diff_drive" filename="libgazebo_ros_diff_drive.so">
-            <!-- Joint names: Must match the joint names defined in the URDF above -->
-            <!-- NOTE: No namespace prefix - joints are named without x3plus/ prefix -->
-            <left_joint>left_wheel_joint</left_joint>
-            <right_joint>right_wheel_joint</right_joint>
-            
-            <!-- WHEEL SEPARATION: Distance between left and right wheels in meters -->
-            <!-- Default: 0.16 (16cm). This should match Y positions: abs(0.08 - (-0.08)) = 0.16 -->
-            <!-- IMPORTANT: Must be consistent with your wheel y_pos values! -->
+            <left_joint>front_left_wheel_joint</left_joint>
+            <right_joint>front_right_wheel_joint</right_joint>
             <wheel_separation>0.16</wheel_separation>
-            
-            <!-- WHEEL DIAMETER: Diameter of wheels (2 * radius) -->
-            <!-- Default: 0.08 (8cm) matches radius 0.04m. Change if you modified wheel radius -->
             <wheel_diameter>0.08</wheel_diameter>
-            
-            <!-- MOTOR TORQUE: Maximum torque output (N⋅m). Default 10. -->
-            <!-- Increase for more powerful drive, decrease for gentler acceleration -->
             <max_wheel_torque>10</max_wheel_torque>
-            
-            <!-- ACCELERATION LIMIT: Maximum wheel acceleration (rad/s^2). Default 1.0 -->
-            <!-- Increase for snappier response, decrease for smoother acceleration -->
             <max_wheel_accel>1.0</max_wheel_accel>
-            
-            <!-- ROS TOPICS: Names of command and odometry topics -->
-            <!-- Send movement commands to: ros2 topic pub /cmd_vel geometry_msgs/Twist ... -->
             <command_topic>cmd_vel</command_topic>
             <odometry_topic>odom</odometry_topic>
             <odometry_frame>odom</odometry_frame>
-            <!-- CRITICAL: Use base_footprint as the robot base frame (no namespace) -->
             <robot_base_frame>base_footprint</robot_base_frame>
-            
-            <!-- ODOMETRY PUBLISHING: Whether to publish position estimates -->
             <publish_odom>true</publish_odom>
-            <!-- Publish TF transforms for odometry (usually false for real robots) -->
             <publish_odom_tf>false</publish_odom_tf>
-            
-            <!-- UPDATE RATE: How often to update physics (Hz). 30 is typical for simulations -->
             <update_rate>30</update_rate>
         </plugin>
     </gazebo>
+    -->
 
 </robot>

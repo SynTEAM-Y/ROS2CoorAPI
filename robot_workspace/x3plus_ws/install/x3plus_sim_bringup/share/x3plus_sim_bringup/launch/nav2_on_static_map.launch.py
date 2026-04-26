@@ -1,0 +1,1 @@
+/home/othman/ROS2CoorAPI/robot_workspace/x3plus_ws/build/x3plus_sim_bringup/launch/nav2_on_static_map.launch.py

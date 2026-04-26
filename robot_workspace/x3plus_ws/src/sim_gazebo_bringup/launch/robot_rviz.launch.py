@@ -21,32 +21,43 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch.actions import ExecuteProcess
 
-
-def resolve_map_file(sim_gazebo_bringup_dir: str) -> str:
-    """Resolve map file path with workspace-relative and home fallbacks."""
-    candidates = []
-
-    # Preferred: maps folder at workspace root (derived from install/share path)
-    # .../x3plus_ws/install/sim_gazebo_bringup/share/sim_gazebo_bringup -> .../x3plus_ws
-    workspace_root = os.path.abspath(
-        os.path.join(sim_gazebo_bringup_dir, '..', '..', '..', '..')
-    )
-    candidates.append(os.path.join(workspace_root, 'maps', 'plain_map.yaml'))
-
-    # Backward-compatible home paths used in older setups
-    candidates.append(
-        os.path.expanduser('~/ROS2CoorAPI/robot_workspace/x3plus_ws/maps/plain_map.yaml')
-    )
-    candidates.append(
-        os.path.expanduser('~/ROS2Coordination/robot_workspace/x3plus_ws/maps/plain_map.yaml')
-    )
-
-    for candidate in candidates:
-        if os.path.exists(candidate):
-            return candidate
-
-    # Return preferred path even if missing; map_publisher will log a clear file error.
-    return candidates[0]
+def convert_package_uris_to_file_uris(urdf_content):
+    """
+    Convert package:// URIs in URDF to file:// URIs for RViz compatibility.
+    
+    RViz can have issues resolving package:// URIs. Using file:// URIs ensures
+    meshes load correctly.
+    
+    Example:
+        package://yahboomcar_description/meshes/X3plus/visual/base_link.STL
+        becomes:
+        file:///path/to/install/yahboomcar_description/share/yahboomcar_description/meshes/X3plus/visual/base_link.STL
+    """
+    def replace_package_uri(match):
+        package_uri = match.group(0)
+        # Extract package name and file path
+        # Format: package://package_name/relative/path
+        match_parts = re.match(r'package://([^/]+)/(.*)', package_uri)
+        if match_parts:
+            package_name = match_parts.group(1)
+            relative_path = match_parts.group(2)
+            try:
+                package_share_dir = get_package_share_directory(package_name)
+                absolute_path = os.path.join(package_share_dir, relative_path)
+                # Convert to file:// URI (must have 3 slashes: file:/// for absolute paths)
+                # Ensure path starts with / for proper file:/// format
+                if not absolute_path.startswith('/'):
+                    absolute_path = '/' + absolute_path
+                file_uri = f'file://{absolute_path}'
+                return file_uri
+            except Exception as e:
+                print(f"Warning: Could not resolve package {package_name}: {e}")
+                return package_uri
+        return package_uri
+    
+    # Replace all package:// URIs with file:// URIs
+    modified_content = re.sub(r'package://[^"\'<\s]+', replace_package_uri, urdf_content)
+    return modified_content
 
 # Fix for snap libc/pthread conflicts on some Ubuntu systems
 # When ROS is installed via snap, it may try to load incompatible snap libc libraries
@@ -134,10 +145,15 @@ def generate_launch_description():
             "sudo apt install ros-humble-xacro"
         )
     
+    # Convert package:// URIs to file:// URIs for RViz mesh loading
+    # RViz can have trouble with package:// URIs, file:// works more reliably
+    robot_description_content = convert_package_uris_to_file_uris(robot_description_content)
+    
     # Fix link/joint names: remove leading slashes from names
     # XACRO with empty ns="/" (/$) generates "/base_link" instead of "base_link"
     # This happens because properties use ${ns}/link_name which becomes //link_name (double slash)
     # after removing, we get just /link_name. We need to remove these leading slashes.
+    # NOTE: This only affects TF frame names, not file paths (which were already converted above)
     robot_description_content = re.sub(r' name="/', r' name="', robot_description_content)
     robot_description_content = re.sub(r' parent="/', r' parent="', robot_description_content)
     robot_description_content = re.sub(r' child="/', r' child="', robot_description_content)
@@ -178,18 +194,10 @@ def generate_launch_description():
         output='screen'
     )
 
-    # Gripper mimic relay - publishes linkage joint states based on grip_joint.
-    # This keeps the full gripper mechanism visually consistent in RViz.
-    gripper_mimic_relay_node = Node(
-        package='x3plus_examples',
-        executable='gripper_mimic_relay',
-        name='gripper_mimic_relay',
-        output='screen'
-    )
-
     # Map Publisher - Loads and publishes map from files
     # Displays the map in RViz so you can see robot movement in context
-    plain_map_file = resolve_map_file(sim_gazebo_bringup_dir)
+    maps_dir = os.path.expanduser('~/ROS2Coordination/robot_workspace/x3plus_ws/maps')
+    plain_map_file = os.path.join(maps_dir, 'plain_map.yaml')
     
     map_publisher_node = Node(
         package='x3plus_examples',
@@ -217,7 +225,6 @@ def generate_launch_description():
         robot_state_publisher_node,
         rviz_proc,
         diff_drive_sim_node,
-        gripper_mimic_relay_node,
         map_publisher_node,
         map_to_odom_broadcaster,
     ])

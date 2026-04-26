@@ -75,7 +75,7 @@ sim_gazebo_bringup/
 ├── package.xml                 # Package metadata
 ├── README.md                   # Full documentation
 ├── SETUP_STATUS.md             # This file
-├── ODOMETRY_CALCULATION.md     # ✅ Odometry math, frames, IMU crosscheck
+│   (odometry math is documented inline in README.md)
 ├── launch/
 │   ├── robot_rviz.launch.py          # ✅ RViz + diff_drive_simulator + map (no Gazebo)
 │   ├── robot_rviz_headless.launch.py # 📦 RViz without GUI (libpthread workaround)
@@ -269,7 +269,7 @@ roslaunch sim_gazebo_bringup robot_rviz.launch.py
    - Launch: `ros2 launch sim_gazebo_bringup gazebo.launch.py`
    - Expected: Robot spawns with physics, responds to `/cmd_vel`
 
-5. **Pick & Place**: ⏳ Implement autonomous arm routines
+5. **Pick & Place**: ✅ 12-step automated sequence (P key) implemented in `arm_controller`
    - Use arm joints to move arm to pick position
    - Move to place position 
    - Set down and release
@@ -284,7 +284,7 @@ roslaunch sim_gazebo_bringup robot_rviz.launch.py
 | Gazebo Spawning | ✅ WORKING | Robot spawns without parse errors |
 | Manual Control Node | ✅ READY | Keyboard teleop works for `/cmd_vel` |
 | Differential Drive Plugin | ✅ READY | Configured, receives `/cmd_vel` |
-| Pick & Place Arm | ⏳ PENDING | Arm moves, needs pick/place routine |
+| Pick & Place Arm | ✅ IMPLEMENTED | 12-step sequence (P key) lifts/rotates/releases |
 | Physics Simulation | ✅ READY | Gazebo physics engine initialized |
 
 ## Support

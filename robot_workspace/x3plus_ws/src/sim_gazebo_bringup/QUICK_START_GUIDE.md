@@ -58,8 +58,8 @@ ros2 run x3plus_examples manual_control
 
 ```
 MOVEMENT:
-  W    Forward (+0.3 m/s)
-  S    Backward (-0.3 m/s)
+  W    Forward (+0.8 m/s)
+  S    Backward (-0.8 m/s)
   A    Rotate Left (+1.0 rad/s)
   D    Rotate Right (-1.0 rad/s)
   SPACE Stop
@@ -116,8 +116,8 @@ After running `ros2 run x3plus_examples manual_control`, you'll see:
 ╚════════════════════════════════════════════════════════════╝
 
 MOVEMENT CONTROLS:
-  W / w   →  Move forward (0.3 m/s)
-  S / s   →  Move backward (-0.3 m/s)
+  W / w   →  Move forward (0.8 m/s)
+  S / s   →  Move backward (-0.8 m/s)
   A / a   →  Rotate left (1.0 rad/s)
   D / d   →  Rotate right (-1.0 rad/s)
   SPACE   →  Emergency stop
@@ -169,7 +169,7 @@ Edit `manual_control.py` to change:
 ```python
 self.wheel_separation = 0.2128  # Change to your robot width (m)
 self.wheel_radius = 0.04      # Change to your wheel radius (m)
-self.max_linear_velocity = 0.3   # Max forward speed (m/s)
+self.max_linear_velocity = 0.8   # Max forward speed (m/s)
 self.max_angular_velocity = 1.0  # Max rotation speed (rad/s)
 self.turn_wheel_speed = 0.5  # Speed used in theoretical formula (m/s)
 ```

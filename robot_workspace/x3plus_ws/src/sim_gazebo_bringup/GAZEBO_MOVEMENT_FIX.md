@@ -51,26 +51,33 @@ ros2 run x3plus_examples manual_control
 
 ## What Changed
 
-### 1. **gazebo.launch.py** - Joint State Source: Ignition Bridge (NOT joint_state_publisher)
+### 1. **gazebo.launch.py** - Joint State Source: Ignition Bridge → Filter Relay
 
 > ⚠️ **Important correction**: An earlier version added `joint_state_publisher` here, but
 > this conflicts with Ignition Gazebo's own `JointStatePublisher` plugin.
 
-In the current implementation, **joint states come from Ignition** via `ros_gz_bridge`:
+In the current implementation, **joint states come from Ignition** via `ros_gz_bridge`,
+then pass through `gripper_mimic_relay` (filter) to `/joint_states`:
 
 ```python
-# ros_gz_bridge forwards /joint_states from Ignition → ROS2
-'/joint_states@sensor_msgs/msg/JointState[ignition.msgs.Model',
+# ros_gz_bridge forwards Ignition model joint state → /joint_states_raw
+'/world/empty/model/x3plus/joint_state@sensor_msgs/msg/JointState[ignition.msgs.Model'
+# remapped to: /joint_states_raw
 ```
 
-The Ignition `JointStatePublisher` plugin (embedded in the URDF) reports **all 15 joints**:
+The Ignition `JointStatePublisher` plugin (embedded in the URDF, 200 Hz update rate)
+reports **all 18 joints**:
 - 4 wheels (front_left, front_right, back_left, back_right)
 - 5 arm joints (arm_joint1 … arm_joint5)
 - 1 gripper joint (grip_joint)
-- 5 mimic linkage joints (rlink_joint2/3, llink_joint1/2/3)
+- 5 mimic linkage joints (rlink_joint2/3, llink_joint1/2/3) — frozen at 0 in physics
+- 3 fixed/sensor joints (mono, laser, base)
+
+The `gripper_mimic_relay` node strips the 5 mimic entries (so RSP can compute them
+via the URDF `<mimic>` tag) and republishes the filtered message on `/joint_states`.
 
 > **Do NOT** add `joint_state_publisher` to `gazebo.launch.py`. A second publisher on
-> `/joint_states` would conflict with the bridge and cause `robot_state_publisher` to
+> `/joint_states` would conflict with the relay and cause `robot_state_publisher` to
 > display wrong poses.
 
 ### 2. **URDF → SDF Pre-conversion** (Critical for Plugin Preservation)
@@ -87,20 +94,24 @@ Written to: `/tmp/x3plus_robot.sdf`
 model plugins (e.g. `JointPositionController`, `DiffDrive`) during its internal
 URDF→SDF conversion. Pre-converting with `ign sdf -p` preserves all plugins.
 
-### 3. **gripper_mimic_relay** — Active Mimic Joint Control
+### 3. **gripper_mimic_relay** — Mimic Joint Filter
 
-Ignition Gazebo does **not** enforce URDF `<mimic>` tags. A dedicated node in
-`x3plus_examples` relays the `grip_joint` position to all 5 linkage joints:
+Ignition Gazebo does **not** enforce URDF `<mimic>` tags. Its `JointStatePublisher`
+emits frozen-at-zero positions for the 5 finger linkage joints. RSP, when it sees a
+mimic joint name in `/joint_states`, takes the value directly and bypasses the URDF
+`<mimic>` computation — leaving fingers visually static.
+
+A dedicated node in `x3plus_examples` filters them out:
 
 ```python
 Node(package='x3plus_examples', executable='gripper_mimic_relay', ...)
+# Subscribes: /joint_states_raw
+# Strips: rlink_joint2/3, llink_joint1/2/3
+# Publishes: /joint_states  (so RSP computes mimic from grip_joint)
 ```
 
-Bridged topics for mimic joints (ROS2 → Ignition):
-```
-/rlink_joint2_cmd_pos, /rlink_joint3_cmd_pos
-/llink_joint1_cmd_pos, /llink_joint2_cmd_pos, /llink_joint3_cmd_pos
-```
+There are **no** bridged `/rlink_joint*_cmd_pos` or `/llink_joint*_cmd_pos` topics —
+the finger linkage is fully passive in physics and only kinematically displayed.
 
 ### 4. **gazebo.launch.py** — RViz is NOT launched by default
 
