@@ -1,0 +1,43 @@
+{
+    "ROS2.distro": "humble",
+    "python.autoComplete.extraPaths": [
+        "/home/othman/ROS2CoorAPI/robot_workspace/x3plus_ws/build/x3plus_mapping_bringup",
+        "/home/othman/ROS2CoorAPI/robot_workspace/x3plus_ws/install/x3plus_mapping_bringup/lib/python3.10/site-packages",
+        "/home/othman/ROS2CoorAPI/robot_workspace/x3plus_ws/build/x3plus_lidar_bringup",
+        "/home/othman/ROS2CoorAPI/robot_workspace/x3plus_ws/install/x3plus_lidar_bringup/lib/python3.10/site-packages",
+        "/home/othman/ROS2CoorAPI/robot_workspace/x3plus_ws/build/yahboomcar_description",
+        "/home/othman/ROS2CoorAPI/robot_workspace/x3plus_ws/install/yahboomcar_description/lib/python3.10/site-packages",
+        "/home/othman/ROS2CoorAPI/robot_workspace/x3plus_ws/build/x3plus_sim_bringup",
+        "/home/othman/ROS2CoorAPI/robot_workspace/x3plus_ws/install/x3plus_sim_bringup/lib/python3.10/site-packages",
+        "/home/othman/ROS2CoorAPI/robot_workspace/x3plus_ws/build/x3plus_multi_bringup",
+        "/home/othman/ROS2CoorAPI/robot_workspace/x3plus_ws/install/x3plus_multi_bringup/lib/python3.10/site-packages",
+        "/home/othman/ROS2CoorAPI/robot_workspace/x3plus_ws/build/x3plus_examples",
+        "/home/othman/ROS2CoorAPI/robot_workspace/x3plus_ws/install/x3plus_examples/lib/python3.10/site-packages",
+        "/home/othman/ROS2CoorAPI/robot_workspace/x3plus_ws/build/scenarios",
+        "/home/othman/ROS2CoorAPI/robot_workspace/x3plus_ws/install/scenarios/lib/python3.10/site-packages",
+        "/home/othman/ROS2CoorAPI/robot_workspace/x3plus_ws/install/orbbec_camera_msgs/local/lib/python3.10/dist-packages",
+        "/home/othman/ROS2CoorAPI/robot_workspace/x3plus_ws/install/astra_camera_msgs/local/lib/python3.10/dist-packages",
+        "/opt/ros/humble/lib/python3.10/site-packages",
+        "/opt/ros/humble/local/lib/python3.10/dist-packages"
+    ],
+    "python.analysis.extraPaths": [
+        "/home/othman/ROS2CoorAPI/robot_workspace/x3plus_ws/build/x3plus_mapping_bringup",
+        "/home/othman/ROS2CoorAPI/robot_workspace/x3plus_ws/install/x3plus_mapping_bringup/lib/python3.10/site-packages",
+        "/home/othman/ROS2CoorAPI/robot_workspace/x3plus_ws/build/x3plus_lidar_bringup",
+        "/home/othman/ROS2CoorAPI/robot_workspace/x3plus_ws/install/x3plus_lidar_bringup/lib/python3.10/site-packages",
+        "/home/othman/ROS2CoorAPI/robot_workspace/x3plus_ws/build/yahboomcar_description",
+        "/home/othman/ROS2CoorAPI/robot_workspace/x3plus_ws/install/yahboomcar_description/lib/python3.10/site-packages",
+        "/home/othman/ROS2CoorAPI/robot_workspace/x3plus_ws/build/x3plus_sim_bringup",
+        "/home/othman/ROS2CoorAPI/robot_workspace/x3plus_ws/install/x3plus_sim_bringup/lib/python3.10/site-packages",
+        "/home/othman/ROS2CoorAPI/robot_workspace/x3plus_ws/build/x3plus_multi_bringup",
+        "/home/othman/ROS2CoorAPI/robot_workspace/x3plus_ws/install/x3plus_multi_bringup/lib/python3.10/site-packages",
+        "/home/othman/ROS2CoorAPI/robot_workspace/x3plus_ws/build/x3plus_examples",
+        "/home/othman/ROS2CoorAPI/robot_workspace/x3plus_ws/install/x3plus_examples/lib/python3.10/site-packages",
+        "/home/othman/ROS2CoorAPI/robot_workspace/x3plus_ws/build/scenarios",
+        "/home/othman/ROS2CoorAPI/robot_workspace/x3plus_ws/install/scenarios/lib/python3.10/site-packages",
+        "/home/othman/ROS2CoorAPI/robot_workspace/x3plus_ws/install/orbbec_camera_msgs/local/lib/python3.10/dist-packages",
+        "/home/othman/ROS2CoorAPI/robot_workspace/x3plus_ws/install/astra_camera_msgs/local/lib/python3.10/dist-packages",
+        "/opt/ros/humble/lib/python3.10/site-packages",
+        "/opt/ros/humble/local/lib/python3.10/dist-packages"
+    ]
+}

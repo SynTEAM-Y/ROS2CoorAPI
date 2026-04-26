@@ -29,6 +29,7 @@ Mimic multipliers (from URDF):
 
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import JointState
 
 
@@ -47,13 +48,19 @@ class GripperMimicRelay(Node):
     def __init__(self):
         super().__init__('gripper_mimic_relay')
 
-        self.pub = self.create_publisher(JointState, '/joint_states', 10)
+        # Use SensorDataQoS (BEST_EFFORT, KEEP_LAST 5) on both ends so the
+        # 200 Hz Ignition stream isn't queued up / dropped under load and RViz
+        # gets the freshest joint states with minimal latency — this is what
+        # makes the arm look smooth in RViz.
+        self.pub = self.create_publisher(
+            JointState, '/joint_states', qos_profile_sensor_data
+        )
 
         self.sub = self.create_subscription(
             JointState,
             '/joint_states_raw',
             self._callback,
-            10,
+            qos_profile_sensor_data,
         )
 
         self.get_logger().info(

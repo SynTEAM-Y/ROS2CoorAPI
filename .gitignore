@@ -205,3 +205,12 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# VS Code C/C++ IntelliSense browse database (huge, regenerated locally)
+**/.vscode/browse.vc.db
+**/.vscode/browse.vc.db-*
+**/.vscode/ipch/
+
+# xacro/tf2_tools frame snapshots
+robot_workspace/**/frames_*.gv
+robot_workspace/**/frames_*.pdf

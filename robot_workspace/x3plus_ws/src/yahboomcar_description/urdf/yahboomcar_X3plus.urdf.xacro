@@ -50,7 +50,7 @@
             <child link="${ns}/${child}"/>
             <origin xyz="${xyz}" rpy="${rpy}"/>
             <axis xyz="0 0 ${axisZ}"/>
-            <limit lower="${lower}" upper="${upper}" effort="100" velocity="3"/>
+            <limit lower="${lower}" upper="${upper}" effort="100" velocity="10"/>
             <!-- Damping/friction added so arm joints absorb their own motion reactions
                  instead of jerking the base around in Gazebo. -->
             <dynamics damping="1.0" friction="0.5"/>
@@ -440,45 +440,45 @@
                 name="ignition::gazebo::systems::JointPositionController">
             <joint_name>arm_joint1</joint_name>
             <topic>/arm_joint1_cmd_pos</topic>
-            <p_gain>15</p_gain> <i_gain>0.3</i_gain> <d_gain>2</d_gain>
-            <i_max>3</i_max> <i_min>-3</i_min>
-            <cmd_max>8</cmd_max> <cmd_min>-8</cmd_min>
+            <p_gain>30</p_gain> <i_gain>0.4</i_gain> <d_gain>3</d_gain>
+            <i_max>4</i_max> <i_min>-4</i_min>
+            <cmd_max>16</cmd_max> <cmd_min>-16</cmd_min>
             <initial_position>0</initial_position>
         </plugin>
         <plugin filename="ignition-gazebo-joint-position-controller-system"
                 name="ignition::gazebo::systems::JointPositionController">
             <joint_name>arm_joint2</joint_name>
             <topic>/arm_joint2_cmd_pos</topic>
-            <p_gain>25</p_gain> <i_gain>0.5</i_gain> <d_gain>3</d_gain>
-            <i_max>5</i_max> <i_min>-5</i_min>
-            <cmd_max>15</cmd_max> <cmd_min>-15</cmd_min>
+            <p_gain>50</p_gain> <i_gain>0.6</i_gain> <d_gain>4.5</d_gain>
+            <i_max>6</i_max> <i_min>-6</i_min>
+            <cmd_max>30</cmd_max> <cmd_min>-30</cmd_min>
             <initial_position>0</initial_position>
         </plugin>
         <plugin filename="ignition-gazebo-joint-position-controller-system"
                 name="ignition::gazebo::systems::JointPositionController">
             <joint_name>arm_joint3</joint_name>
             <topic>/arm_joint3_cmd_pos</topic>
-            <p_gain>20</p_gain> <i_gain>0.4</i_gain> <d_gain>2.5</d_gain>
-            <i_max>4</i_max> <i_min>-4</i_min>
-            <cmd_max>12</cmd_max> <cmd_min>-12</cmd_min>
+            <p_gain>40</p_gain> <i_gain>0.5</i_gain> <d_gain>3.5</d_gain>
+            <i_max>5</i_max> <i_min>-5</i_min>
+            <cmd_max>24</cmd_max> <cmd_min>-24</cmd_min>
             <initial_position>0</initial_position>
         </plugin>
         <plugin filename="ignition-gazebo-joint-position-controller-system"
                 name="ignition::gazebo::systems::JointPositionController">
             <joint_name>arm_joint4</joint_name>
             <topic>/arm_joint4_cmd_pos</topic>
-            <p_gain>15</p_gain> <i_gain>0.3</i_gain> <d_gain>2</d_gain>
-            <i_max>3</i_max> <i_min>-3</i_min>
-            <cmd_max>8</cmd_max> <cmd_min>-8</cmd_min>
+            <p_gain>30</p_gain> <i_gain>0.4</i_gain> <d_gain>3</d_gain>
+            <i_max>4</i_max> <i_min>-4</i_min>
+            <cmd_max>16</cmd_max> <cmd_min>-16</cmd_min>
             <initial_position>0</initial_position>
         </plugin>
         <plugin filename="ignition-gazebo-joint-position-controller-system"
                 name="ignition::gazebo::systems::JointPositionController">
             <joint_name>arm_joint5</joint_name>
             <topic>/arm_joint5_cmd_pos</topic>
-            <p_gain>10</p_gain> <i_gain>0.2</i_gain> <d_gain>1.5</d_gain>
-            <i_max>2</i_max> <i_min>-2</i_min>
-            <cmd_max>6</cmd_max> <cmd_min>-6</cmd_min>
+            <p_gain>20</p_gain> <i_gain>0.3</i_gain> <d_gain>2</d_gain>
+            <i_max>3</i_max> <i_min>-3</i_min>
+            <cmd_max>12</cmd_max> <cmd_min>-12</cmd_min>
             <initial_position>0</initial_position>
         </plugin>
         <plugin filename="ignition-gazebo-joint-position-controller-system"
