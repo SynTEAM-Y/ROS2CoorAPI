@@ -19,6 +19,7 @@ Controls:
 
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 from geometry_msgs.msg import Twist, TransformStamped
 from std_msgs.msg import Float64
 from sensor_msgs.msg import JointState
@@ -60,12 +61,14 @@ class ArmController(Node):
             10
         )
         
-        # Subscribe to joint states for feedback
+        # Subscribe to joint states for feedback. Use SensorDataQoS so we are
+        # compatible with gripper_mimic_relay's BEST_EFFORT publisher (avoids
+        # the 'incompatible QoS' warning and missed updates).
         self.joint_state_sub = self.create_subscription(
             JointState,
             '/joint_states',
             self.joint_state_callback,
-            10
+            qos_profile_sensor_data,
         )
         
         # Current joint positions
@@ -95,12 +98,11 @@ class ArmController(Node):
         self.down_pose  = [0.0, -1.0,   -0.3,   -0.3,  0.0]  # arm reaching forward-down
 
         # Smooth trajectory: target positions, velocity & acceleration limits
-        # Tuned for snappy-but-smooth motion in Gazebo+RViz. The trapezoidal
-        # profile runs at 200 Hz; with a=40 and v=8 the joint accelerates from
-        # rest to peak speed in 0.2 s, which is well within what the URDF
-        # joint velocity limit (10 rad/s) and the per-joint PIDs can track.
-        self.smooth_speed = 8.0    # max joint speed (rad/s)
-        self.smooth_accel = 40.0   # max joint acceleration (rad/s²)
+        # Modest bump over the original 4.0 / 12.0: faster than the real
+        # robot's 1 rad/s but well within what the (lightly-tuned) Gazebo
+        # PIDs can track without overshoot or base shake.
+        self.smooth_speed = 5.0    # max joint speed (rad/s)
+        self.smooth_accel = 18.0   # max joint acceleration (rad/s²)
         # _smooth_pos is the internal integrator — NEVER overwritten by callbacks
         self._smooth_pos = dict(self.current_positions)
         # Gripper starts CLOSED to match diff_drive_simulator initial state
