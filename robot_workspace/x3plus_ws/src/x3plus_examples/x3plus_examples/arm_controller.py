@@ -410,8 +410,13 @@ class ArmController(Node):
 
 
 def get_key(settings):
-    """Get a single keypress from terminal"""
-    tty.setraw(sys.stdin.fileno())
+    """Get a single keypress from terminal.
+
+    Uses cbreak mode (not raw) so OPOST output processing stays enabled —
+    that keeps '\\n' translating to '\\r\\n' on stdout, so log lines from
+    rclpy don't stair-step across the terminal.
+    """
+    tty.setcbreak(sys.stdin.fileno())
     # Use select to check if input is available (non-blocking with timeout)
     rlist, _, _ = select.select([sys.stdin], [], [], 0.1)
     if rlist:
