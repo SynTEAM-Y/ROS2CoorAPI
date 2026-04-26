@@ -11,7 +11,21 @@ ros2 launch sim_gazebo_bringup robot_rviz.launch.py
 
 ### 🤖 Full Gazebo Simulation (Recommended)
 ```bash
+# Default empty world
 ros2 launch sim_gazebo_bringup gazebo.launch.py
+
+# Pick a different world (any .sdf in worlds/ — currently: empty, office)
+ros2 launch sim_gazebo_bringup gazebo.launch.py world:=office
+```
+
+### 🏙️ RViz With a Map
+```bash
+# Default plain_map
+ros2 launch sim_gazebo_bringup robot_rviz.launch.py
+
+# Pick a different map (any .yaml in maps/ — e.g. plain_map,
+# turtlebot3_world, willow, yahboomcar, square_map, partial_office, ...)
+ros2 launch sim_gazebo_bringup robot_rviz.launch.py map:=turtlebot3_world
 ```
 
 ### 🎮 Gazebo Without RViz Overlay
@@ -138,12 +152,14 @@ ros2 launch sim_gazebo_bringup gazebo.launch.py use_rviz:=false use_sim_time:=fa
 |----------|---------|-------------|
 | `use_rviz` | `true` | Argument accepted but RViz node is **not launched** from this file (Humble `IfAction` limitation). Launch RViz separately with `robot_rviz.launch.py` |
 | `use_sim_time` | `true` | Use simulated time (required for Gazebo) |
+| `world` | `empty` | World to load. Basename of any `.sdf` in `worlds/` (currently `empty`, `office`) or an absolute path to a custom `.sdf`. The launcher prints the available list at startup. |
 
 ### robot_rviz.launch.py
 
 | Argument | Default | Description |
 |----------|---------|-------------|
 | `use_sim_time` | `false` | Use simulated time |
+| `map` | `plain_map` | Map to load. Basename of any `.yaml` in `maps/` or an absolute path to a custom `.yaml`. The launcher prints the available list at startup. |
 
 ## Verifying the Simulation Works
 
@@ -188,8 +204,21 @@ ros2 topic pub /cmd_vel geometry_msgs/Twist '{linear: {x: 0.1}}'
 
 ## Available Worlds
 
-- **empty.sdf** - Minimal world with ground plane, good for testing
-- **office.sdf** - Office environment with obstacles
+Any `.sdf` file in `worlds/` is selectable via `world:=<name>` (without the
+extension). Currently shipped:
+
+- **empty.sdf** — Minimal world with ground plane, good for testing
+- **office.sdf** — Office environment with obstacles
+
+## Available Maps (RViz)
+
+Any `.yaml` file in `maps/` is selectable via `map:=<name>` (without the
+extension). Currently shipped: `plain_map`, `circular_map`, `square_map`,
+`partial_office`, `turtlebot3_world`, `willow`, `yahboomcar`, `test_map`,
+`map_20251006_221007`.
+
+Add your own by dropping a matching `.pgm`/`.yaml` pair into `maps/` and
+rebuilding the package.
 
 ## Package Structure
 
@@ -212,12 +241,13 @@ sim_gazebo_bringup/
 ├── worlds/
 │   ├── empty.sdf               # Minimal world (ODE physics, ground plane, sun)
 │   └── office.sdf              # Office environment with 1×1×1 m box obstacle at (2,2)
+├── maps/                       # 2D occupancy maps for RViz (selectable via map:=<name>)
+│   ├── plain_map.yaml/.pgm
+│   ├── turtlebot3_world.yaml/.pgm
+│   ├── willow.yaml/.pgm
+│   └── ...                     # plus circular_map, square_map, partial_office, yahboomcar, ...
 └── rviz/
     └── gazebo_view.rviz        # Enhanced RViz config (fixed frame: base_footprint)
-```
-│   ├── empty.sdf               # Minimal world file
-│   └── office.sdf              # Office environment world
-└── rviz/                       # RViz configuration files (optional)
 ```
 
 ## Quick Troubleshooting

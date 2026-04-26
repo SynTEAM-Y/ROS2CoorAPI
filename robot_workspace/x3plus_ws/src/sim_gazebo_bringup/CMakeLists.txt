@@ -20,6 +20,12 @@ install(
   DESTINATION share/${PROJECT_NAME}/worlds
 )
 
+# Copy map files (used by robot_rviz.launch.py via the `map` argument)
+install(
+  DIRECTORY maps/
+  DESTINATION share/${PROJECT_NAME}/maps
+)
+
 # Copy RViz configuration files to install directory
 install(
   DIRECTORY rviz/

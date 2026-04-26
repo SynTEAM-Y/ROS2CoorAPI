@@ -9,6 +9,17 @@ This is useful for:
 
 Usage:
     ros2 launch sim_gazebo_bringup robot_rviz.launch.py
+
+Optional arguments:
+    use_sim_time:=true               - Use simulated time (default: false)
+    map:=<name>                      - Map to load. Options come from the
+                                       maps/ directory of this package.
+                                       Defaults to 'plain_map'. Examples:
+                                         map:=plain_map
+                                         map:=turtlebot3_world
+                                         map:=willow
+                                       You may also pass an absolute path to
+                                       a .yaml map file.
 """
 
 import os
@@ -112,6 +123,46 @@ def generate_launch_description():
     # Get package shares
     yahboomcar_description_dir = get_package_share_directory('yahboomcar_description')
     sim_gazebo_bringup_dir = get_package_share_directory('sim_gazebo_bringup')
+
+    # Discover available maps in the installed maps/ directory so the user gets
+    # a helpful list if they pick a name that doesn't exist.
+    maps_dir = os.path.join(sim_gazebo_bringup_dir, 'maps')
+    if os.path.isdir(maps_dir):
+        available_maps = sorted(
+            os.path.splitext(f)[0]
+            for f in os.listdir(maps_dir)
+            if f.endswith('.yaml')
+        )
+    else:
+        available_maps = []
+    map_arg = DeclareLaunchArgument(
+        'map',
+        default_value='plain_map',
+        description=(
+            'Map to load (basename without .yaml, or absolute path to a .yaml file). '
+            'Available: ' + (', '.join(available_maps) if available_maps else '(none)')
+        ),
+    )
+    print('[sim_gazebo_bringup] Available maps: ' + ', '.join(available_maps))
+    print('[sim_gazebo_bringup] Use map:=<name> to pick one (default: plain_map)')
+
+    import sys
+    requested_map = 'plain_map'
+    for a in sys.argv:
+        if a.startswith('map:='):
+            requested_map = a.split(':=', 1)[1]
+            break
+    if os.path.isabs(requested_map) and os.path.isfile(requested_map):
+        plain_map_file = requested_map
+    else:
+        plain_map_file = os.path.join(maps_dir, requested_map + '.yaml')
+        if not os.path.isfile(plain_map_file):
+            raise RuntimeError(
+                f"Map '{requested_map}' not found. "
+                f"Available: {', '.join(available_maps)}. "
+                f"Pass map:=<name> or an absolute path to a .yaml file."
+            )
+    print(f'[sim_gazebo_bringup] Loading map: {plain_map_file}')
     
     # Paths
     xacro_file = os.path.join(yahboomcar_description_dir, 'urdf', 'yahboomcar_X3plus.urdf.xacro')
@@ -196,8 +247,7 @@ def generate_launch_description():
 
     # Map Publisher - Loads and publishes map from files
     # Displays the map in RViz so you can see robot movement in context
-    maps_dir = os.path.expanduser('~/ROS2Coordination/robot_workspace/x3plus_ws/maps')
-    plain_map_file = os.path.join(maps_dir, 'plain_map.yaml')
+    # (path resolved above from the `map` launch argument)
     
     map_publisher_node = Node(
         package='x3plus_examples',
@@ -222,6 +272,7 @@ def generate_launch_description():
 
     return LaunchDescription([
         use_sim_time_arg,
+        map_arg,
         robot_state_publisher_node,
         rviz_proc,
         diff_drive_sim_node,

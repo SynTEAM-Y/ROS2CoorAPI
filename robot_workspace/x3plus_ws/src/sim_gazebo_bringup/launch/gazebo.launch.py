@@ -19,10 +19,17 @@ Or if that doesn't work due to conflicts, use the RViz-only launch instead:
 
 Usage:
     ros2 launch sim_gazebo_bringup gazebo.launch.py
-    
+
 Optional arguments:
     use_rviz:=false                  - Disable RViz (default: true)
     use_sim_time:=false              - Disable simulated time (default: true)
+    world:=office                    - World to load. Options come from the
+                                       worlds/ directory of this package.
+                                       Defaults to 'empty'. Examples:
+                                         world:=empty
+                                         world:=office
+                                       You may also pass an absolute path to a
+                                       custom .sdf file.
 """
 
 import os
@@ -84,6 +91,26 @@ def generate_launch_description():
         description='Start RViz visualization'
     )
 
+    # Discover available worlds in the installed worlds/ directory so the user
+    # gets a helpful list if they pick a name that doesn't exist.
+    sim_gazebo_bringup_dir_early = get_package_share_directory('sim_gazebo_bringup')
+    worlds_dir = os.path.join(sim_gazebo_bringup_dir_early, 'worlds')
+    available_worlds = sorted(
+        os.path.splitext(f)[0]
+        for f in os.listdir(worlds_dir)
+        if f.endswith('.sdf')
+    )
+    world_arg = DeclareLaunchArgument(
+        'world',
+        default_value='empty',
+        description=(
+            'World to load (basename without .sdf, or absolute path to a .sdf file). '
+            'Available: ' + ', '.join(available_worlds)
+        ),
+    )
+    print('[sim_gazebo_bringup] Available worlds: ' + ', '.join(available_worlds))
+    print('[sim_gazebo_bringup] Use world:=<name> to pick one (default: empty)')
+
     # Get package shares
     try:
         ros_gz_sim_dir = get_package_share_directory('ros_gz_sim')
@@ -102,7 +129,29 @@ def generate_launch_description():
     # Paths
     xacro_file = os.path.join(yahboomcar_description_dir, 'urdf', 'yahboomcar_X3plus.urdf.xacro')
     rviz_config_file = os.path.join(yahboomcar_description_dir, 'rviz', 'yahboomcar.rviz')
-    world_file = os.path.join(sim_gazebo_bringup_dir, 'worlds', 'empty.sdf')
+
+    # Resolve `world` argument to an absolute .sdf path. Accepts a basename
+    # (looked up in worlds/) or an absolute path. The resolution is done at
+    # launch-description build time, so an unknown world fails fast with a
+    # helpful message instead of after Gazebo has already been launched.
+    import sys
+    requested_world = 'empty'
+    for a in sys.argv:
+        if a.startswith('world:='):
+            requested_world = a.split(':=', 1)[1]
+            break
+    if os.path.isabs(requested_world) and os.path.isfile(requested_world):
+        world_file = requested_world
+    else:
+        candidate = os.path.join(sim_gazebo_bringup_dir, 'worlds', requested_world + '.sdf')
+        if not os.path.isfile(candidate):
+            raise RuntimeError(
+                f"World '{requested_world}' not found. "
+                f"Available: {', '.join(available_worlds)}. "
+                f"Pass world:=<name> or an absolute path to a .sdf file."
+            )
+        world_file = candidate
+    print(f'[sim_gazebo_bringup] Loading world: {world_file}')
 
     # Get configuration values
     use_sim_time = LaunchConfiguration('use_sim_time')
@@ -158,6 +207,12 @@ def generate_launch_description():
     # the ros_gz_bridge below forwards them to /joint_states. Running both publishers
     # would race and overwrite each other.
 
+    # Ignition embeds the world name in the joint_state topic. Derive it from
+    # the chosen world file (basename without extension) so switching worlds
+    # via world:=<name> doesn't silently break the joint_state bridge.
+    world_name = os.path.splitext(os.path.basename(world_file))[0]
+    joint_state_topic = f'/world/{world_name}/model/x3plus/joint_state'
+
     # ros_gz bridge: forward arm/gripper position commands from ROS to Ignition,
     # and joint states + clock from Ignition back to ROS.
     ros_gz_bridge_node = Node(
@@ -178,7 +233,7 @@ def generate_launch_description():
             # Odometry: Ignition -> ROS
             '/odom@nav_msgs/msg/Odometry[ignition.msgs.Odometry',
             # Joint states: Ignition Model -> ROS sensor_msgs/JointState
-            '/world/empty/model/x3plus/joint_state@sensor_msgs/msg/JointState[ignition.msgs.Model',
+            f'{joint_state_topic}@sensor_msgs/msg/JointState[ignition.msgs.Model',
             # Simulation clock: Ignition -> ROS
             '/clock@rosgraph_msgs/msg/Clock[ignition.msgs.Clock',
         ],
@@ -187,7 +242,7 @@ def generate_launch_description():
             # The gripper_mimic_relay node filters out the frozen mimic joints
             # and republishes to /joint_states so robot_state_publisher can
             # compute finger positions via the URDF <mimic> relationship.
-            ('/world/empty/model/x3plus/joint_state', '/joint_states_raw'),
+            (joint_state_topic, '/joint_states_raw'),
         ],
         parameters=[{'use_sim_time': use_sim_time}],
     )
@@ -253,6 +308,7 @@ def generate_launch_description():
     launch_desc = [
         use_sim_time_arg,
         use_rviz_arg,
+        world_arg,
         set_gazebo_model_path,
         set_gazebo_model_path2,
         robot_state_publisher_node,
