@@ -34,6 +34,7 @@ Optional arguments:
 
 import os
 import re
+import sys
 import subprocess
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -78,6 +79,42 @@ def convert_package_uris_to_absolute_paths(urdf_content):
     modified_content = re.sub(r'package://[^"\'<\s]+', replace_package_uri, urdf_content)
     return modified_content
 
+
+def _interactive_pick(label, choices, default):
+    """Prompt the user to pick one of `choices`. Returns the chosen string.
+
+    - If a value is already supplied via `<label>:=...` on the command line,
+      that value is used and no prompt is shown.
+    - If stdin/stdout is not a TTY (e.g. launch from another launch file),
+      the default is used silently.
+    - Empty input -> default. Invalid input -> re-prompt.
+    """
+    prefix = f'{label}:='
+    for a in sys.argv:
+        if a.startswith(prefix):
+            return a.split(':=', 1)[1]
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return default
+    print()
+    print(f'  Select a {label}:')
+    for i, name in enumerate(choices, 1):
+        marker = '  (default)' if name == default else ''
+        print(f'    [{i}] {name}{marker}')
+    while True:
+        try:
+            raw = input(f'  Enter number 1-{len(choices)} or name [default: {default}]: ').strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return default
+        if raw == '':
+            return default
+        if raw.isdigit() and 1 <= int(raw) <= len(choices):
+            return choices[int(raw) - 1]
+        if raw in choices:
+            return raw
+        print(f'  ! Not a valid choice. Try a number 1-{len(choices)} or one of: {", ".join(choices)}')
+
+
 def generate_launch_description():
     # Arguments
     use_sim_time_arg = DeclareLaunchArgument(
@@ -100,16 +137,18 @@ def generate_launch_description():
         for f in os.listdir(worlds_dir)
         if f.endswith('.sdf')
     )
+
+    # Interactive picker (only if world:= not provided and stdin is a TTY).
+    requested_world = _interactive_pick('world', available_worlds, 'empty')
+
     world_arg = DeclareLaunchArgument(
         'world',
-        default_value='empty',
+        default_value=requested_world,
         description=(
             'World to load (basename without .sdf, or absolute path to a .sdf file). '
             'Available: ' + ', '.join(available_worlds)
         ),
     )
-    print('[sim_gazebo_bringup] Available worlds: ' + ', '.join(available_worlds))
-    print('[sim_gazebo_bringup] Use world:=<name> to pick one (default: empty)')
 
     # Get package shares
     try:
@@ -130,16 +169,8 @@ def generate_launch_description():
     xacro_file = os.path.join(yahboomcar_description_dir, 'urdf', 'yahboomcar_X3plus.urdf.xacro')
     rviz_config_file = os.path.join(yahboomcar_description_dir, 'rviz', 'yahboomcar.rviz')
 
-    # Resolve `world` argument to an absolute .sdf path. Accepts a basename
-    # (looked up in worlds/) or an absolute path. The resolution is done at
-    # launch-description build time, so an unknown world fails fast with a
-    # helpful message instead of after Gazebo has already been launched.
-    import sys
-    requested_world = 'empty'
-    for a in sys.argv:
-        if a.startswith('world:='):
-            requested_world = a.split(':=', 1)[1]
-            break
+    # Resolve `world` (already chosen interactively above unless world:= was
+    # passed; either way `requested_world` holds the basename / abs path).
     if os.path.isabs(requested_world) and os.path.isfile(requested_world):
         world_file = requested_world
     else:

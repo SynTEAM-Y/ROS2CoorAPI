@@ -24,6 +24,7 @@ Optional arguments:
 
 import os
 import re
+import sys
 import subprocess
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -69,6 +70,34 @@ def convert_package_uris_to_file_uris(urdf_content):
     # Replace all package:// URIs with file:// URIs
     modified_content = re.sub(r'package://[^"\'<\s]+', replace_package_uri, urdf_content)
     return modified_content
+
+
+def _interactive_pick(label, choices, default):
+    """Prompt the user to pick one of `choices`. See gazebo.launch.py for behaviour."""
+    prefix = f'{label}:='
+    for a in sys.argv:
+        if a.startswith(prefix):
+            return a.split(':=', 1)[1]
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return default
+    print()
+    print(f'  Select a {label}:')
+    for i, name in enumerate(choices, 1):
+        marker = '  (default)' if name == default else ''
+        print(f'    [{i}] {name}{marker}')
+    while True:
+        try:
+            raw = input(f'  Enter number 1-{len(choices)} or name [default: {default}]: ').strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return default
+        if raw == '':
+            return default
+        if raw.isdigit() and 1 <= int(raw) <= len(choices):
+            return choices[int(raw) - 1]
+        if raw in choices:
+            return raw
+        print(f'  ! Not a valid choice. Try a number 1-{len(choices)} or one of: {", ".join(choices)}')
 
 # Fix for snap libc/pthread conflicts on some Ubuntu systems
 # When ROS is installed via snap, it may try to load incompatible snap libc libraries
@@ -143,15 +172,12 @@ def generate_launch_description():
             'Available: ' + (', '.join(available_maps) if available_maps else '(none)')
         ),
     )
-    print('[sim_gazebo_bringup] Available maps: ' + ', '.join(available_maps))
-    print('[sim_gazebo_bringup] Use map:=<name> to pick one (default: plain_map)')
 
-    import sys
-    requested_map = 'plain_map'
-    for a in sys.argv:
-        if a.startswith('map:='):
-            requested_map = a.split(':=', 1)[1]
-            break
+    # Interactive picker (only if map:= not provided and stdin is a TTY).
+    requested_map = _interactive_pick(
+        'map', available_maps if available_maps else ['plain_map'], 'plain_map'
+    )
+
     if os.path.isabs(requested_map) and os.path.isfile(requested_map):
         plain_map_file = requested_map
     else:
