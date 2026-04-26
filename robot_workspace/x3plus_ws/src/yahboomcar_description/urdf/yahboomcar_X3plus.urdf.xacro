@@ -485,9 +485,12 @@
                 name="ignition::gazebo::systems::JointPositionController">
             <joint_name>grip_joint</joint_name>
             <topic>/grip_joint_cmd_pos</topic>
-            <p_gain>200</p_gain> <i_gain>2.0</i_gain> <d_gain>5</d_gain>
-            <i_max>10</i_max> <i_min>-10</i_min>
-            <cmd_max>100</cmd_max> <cmd_min>-100</cmd_min>
+            <!-- Sized for a small plastic finger. P=200 / cmd_max=100 was launching
+                 the whole robot on the first 'open gripper' command because the
+                 100 N·m wrist torque propagated through the arm to base_link. -->
+            <p_gain>30</p_gain> <i_gain>0.3</i_gain> <d_gain>1.5</d_gain>
+            <i_max>2</i_max> <i_min>-2</i_min>
+            <cmd_max>5</cmd_max> <cmd_min>-5</cmd_min>
             <initial_position>0</initial_position>
         </plugin>
         <!-- NOTE: Mimic gripper finger joints (llink_joint1..3, rlink_joint2..3) have

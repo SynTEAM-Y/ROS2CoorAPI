@@ -248,6 +248,13 @@ class ArmController(Node):
         if self._pick_place_running:
             self.get_logger().warn('Pick and place already running — ignoring')
             return
+        # Sync the trajectory generator's internal state to the latest measured
+        # joint positions so the first step doesn't see a phantom step from 0.
+        for joint_name in list(self._smooth_pos.keys()):
+            if joint_name in self.current_positions:
+                self._smooth_pos[joint_name] = self.current_positions[joint_name]
+                self._smooth_vel[joint_name] = 0.0
+                self.target_positions[joint_name] = self.current_positions[joint_name]
         t = threading.Thread(target=self._pick_place_thread, daemon=True)
         t.start()
 
