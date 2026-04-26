@@ -280,7 +280,7 @@ def generate_launch_description():
         executable='map_publisher',
         name='map_publisher',
         output='screen',
-        arguments=['--map-path', plain_map_file]
+        parameters=[{'map_path': plain_map_file}],
     )
 
     # Static Transform: map to odom
