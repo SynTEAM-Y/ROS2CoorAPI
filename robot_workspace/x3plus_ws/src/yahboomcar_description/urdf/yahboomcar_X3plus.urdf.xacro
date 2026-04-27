@@ -130,14 +130,37 @@
             <origin xyz="${x_pos} ${y_pos} -0.036" rpy="0 0 0"/>
             <!-- Rotation axis: 0 1 0 = Y-axis rotation (wheels spin side-to-side) -->
             <axis xyz="0 1 0"/>
-            <!-- MOTOR TORQUE LIMIT (effort): 10 N⋅m default. Increase for more power, decrease for less. -->
-            <!-- MOTOR SPEED LIMIT (velocity): 2 rad/s default. Increase for faster rotation. -->
-            <limit effort="10" velocity="2"/>
+            <!-- MOTOR TORQUE LIMIT (effort): N⋅m. -->
+            <!-- MOTOR SPEED LIMIT (velocity): rad/s. With wheel_radius=0.04 m,
+                 max linear speed = velocity * 0.04. Old value (2 rad/s) capped the
+                 robot at 0.08 m/s, making it look almost stationary. 30 rad/s
+                 -> ~1.2 m/s ceiling, comfortably above commanded 0.8 m/s. -->
+            <limit effort="10" velocity="30"/>
             <dynamics damping="0.1" friction="0.0"/>
         </joint>
     </xacro:macro>
 
-    <xacro:common_link name="base_link" material="Green" path="X3plus">
+    <!-- base_link: visual uses chassis mesh; collision is a SIMPLE BOX positioned ABOVE
+         the wheel contact line. The original chassis collision mesh extended downward
+         past the wheel bottoms, lifting wheels off the ground (chassis rested on its
+         own body, wheels spun in air, robot didn't move). -->
+    <link name="base_link">
+        <visual>
+            <geometry>
+                <mesh filename="package://yahboomcar_description/meshes/X3plus/visual/base_link.STL"/>
+            </geometry>
+            <origin xyz="0 0 0" rpy="0 0 0"/>
+            <material name="Green"/>
+        </visual>
+        <collision>
+            <!-- Box: 24cm long x 18cm wide x 8cm tall, centered 4cm above base_link
+                 origin (which itself is 7.6cm above ground). Bottom of box sits at
+                 z=0.076 m world, well above wheel tops at z=0.08 m. -->
+            <geometry>
+                <box size="0.24 0.18 0.08"/>
+            </geometry>
+            <origin xyz="-0.02 0 0.04" rpy="0 0 0"/>
+        </collision>
         <inertial>
             <origin xyz="-0.0304416859098744 4.23384368655101E-05 0.0448234503408059" rpy="0 0 0"/>
             <!-- Increased from 1.075 kg to 4.0 kg. The original CAD inertia was for the
@@ -152,7 +175,7 @@
                     iyz="-1.10079499865282E-06"
                     izz="0.0482"/>
         </inertial>
-    </xacro:common_link>
+    </link>
     <xacro:fixed_joint name="base_joint" parent="base_footprint" child="base_link" xyz="0.0 0.0 0.076" rpy="0 0 0"/>
     <xacro:fixed_joint name="base_imu" parent="base_link" child="imu_link" xyz="0.001 0.017 0.0322" rpy="0 3.1415 1.5707"/>
 
@@ -176,38 +199,42 @@
     <xacro:wheel_joint name="back_right_wheel_joint" parent="base_link" child="back_right_wheel" x_pos="-0.1146" y_pos="-0.1064"/>
 
     <!-- GAZEBO FRICTION PROPERTIES FOR ALL 4 WHEELS -->
-    <!-- mu1, mu2: Friction coefficients (0.0-1.0+). Higher = more grip. 0.8 is typical rubber on floor -->
-    <!-- kp, kd: Contact stiffness and damping. Higher kp = stiffer contact, better for rigid wheels -->
+    <!-- FRONT wheels = driven by DiffDrive plugin → high friction for traction.
+         BACK wheels  = passive (free-spinning) → LOW friction so they don't fight
+         the chassis during in-place yaw rotation. With high friction on all 4 wheels
+         the back pair anchors the chassis and the robot just rocks instead of turning.
+         Removed <fdir1> — in Ignition Fortress it does not reliably set the friction
+         axis the way Gazebo Classic did. -->
     <gazebo reference="front_left_wheel">
         <material>Gazebo/Black</material>
-        <mu1>1.5</mu1>
-        <mu2>1.5</mu2>
-        <kp>1000000.0</kp>
-        <kd>1.0</kd>
+        <mu1>2.0</mu1>
+        <mu2>2.0</mu2>
+        <kp>200000.0</kp>
+        <kd>50.0</kd>
     </gazebo>
 
     <gazebo reference="front_right_wheel">
         <material>Gazebo/Black</material>
-        <mu1>1.5</mu1>
-        <mu2>1.5</mu2>
-        <kp>1000000.0</kp>
-        <kd>1.0</kd>
+        <mu1>2.0</mu1>
+        <mu2>2.0</mu2>
+        <kp>200000.0</kp>
+        <kd>50.0</kd>
     </gazebo>
 
     <gazebo reference="back_left_wheel">
         <material>Gazebo/Black</material>
-        <mu1>1.5</mu1>
-        <mu2>1.5</mu2>
-        <kp>1000000.0</kp>
-        <kd>1.0</kd>
+        <mu1>2.0</mu1>
+        <mu2>2.0</mu2>
+        <kp>200000.0</kp>
+        <kd>50.0</kd>
     </gazebo>
 
     <gazebo reference="back_right_wheel">
         <material>Gazebo/Black</material>
-        <mu1>1.5</mu1>
-        <mu2>1.5</mu2>
-        <kp>1000000.0</kp>
-        <kd>1.0</kd>
+        <mu1>2.0</mu1>
+        <mu2>2.0</mu2>
+        <kp>200000.0</kp>
+        <kd>50.0</kd>
     </gazebo>
 
     <xacro:common_link name="laser_link" material="DarkGray" path="sensor_X3plus">
@@ -507,16 +534,27 @@
         <plugin filename="ignition-gazebo-diff-drive-system"
                 name="ignition::gazebo::systems::DiffDrive">
             <left_joint>front_left_wheel_joint</left_joint>
+            <left_joint>back_left_wheel_joint</left_joint>
             <right_joint>front_right_wheel_joint</right_joint>
-            <wheel_separation>0.16</wheel_separation>
+            <right_joint>back_right_wheel_joint</right_joint>
+            <!-- Track width: wheels at y=±0.1064 (from xacro:wheel_joint args).
+                 Previous value 0.16 was wrong → plugin under-rotated by 0.16/0.2128
+                 = 75% (closed-loop "90°" turn was only ~68°) and odometry yaw drifted. -->
+            <wheel_separation>0.2128</wheel_separation>
             <wheel_radius>0.04</wheel_radius>
             <max_linear_acceleration>3.0</max_linear_acceleration>
             <max_angular_acceleration>3.0</max_angular_acceleration>
             <max_linear_velocity>1.5</max_linear_velocity>
             <max_angular_velocity>3.0</max_angular_velocity>
-            <topic>/cmd_vel</topic>
-            <odom_topic>/odom</odom_topic>
-            <tf_topic>/tf</tf_topic>
+            <!-- IMPORTANT: leading-slash topics like '/cmd_vel' are silently
+                 ignored by ignition-gazebo-diff-drive-system in Fortress, which
+                 then falls back to its default '/model/<name>/cmd_vel' and never
+                 subscribes to '/cmd_vel'. We use the model-namespaced topics
+                 here and remap them to /cmd_vel and /odom in the ros_gz_bridge
+                 (see sim_gazebo_bringup/launch/gazebo.launch.py). -->
+            <topic>/model/x3plus/cmd_vel</topic>
+            <odom_topic>/model/x3plus/odometry</odom_topic>
+            <tf_topic>/model/x3plus/tf</tf_topic>
             <frame_id>odom</frame_id>
             <child_frame_id>base_footprint</child_frame_id>
             <odom_publish_frequency>30</odom_publish_frequency>
@@ -527,6 +565,23 @@
                 name="ignition::gazebo::systems::JointStatePublisher">
             <update_rate>200</update_rate>
         </plugin>
+        <!-- Required for the IMU sensor below to publish data. Without it the
+             /imu topic exists in Ignition but is never updated. -->
+        <plugin filename="ignition-gazebo-imu-system"
+                name="ignition::gazebo::systems::Imu">
+        </plugin>
+    </gazebo>
+
+    <!-- IMU sensor on the chassis. Publishes real chassis orientation (not
+         wheel-odom integration), used by manual_control's closed-loop 90° turn
+         so the turn stops at the actual heading regardless of wheel slip. -->
+    <gazebo reference="imu_link">
+        <sensor name="imu_sensor" type="imu">
+            <always_on>1</always_on>
+            <update_rate>100</update_rate>
+            <visualize>false</visualize>
+            <topic>/model/x3plus/imu</topic>
+        </sensor>
     </gazebo>
 
     <!-- Disable gravity on the passive mimic gripper links so they do not flop in Gazebo.

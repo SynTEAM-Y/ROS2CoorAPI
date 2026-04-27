@@ -120,11 +120,20 @@ class DifferentialDriveControl(Node):
         self.odom_yaw = math.atan2(siny_cosp, cosy_cosp)
     
     def imu_callback(self, msg):
-        """Track current yaw from IMU (ground truth in Gazebo)"""
+        """Track current chassis yaw from IMU.
+
+        The IMU is mounted with URDF rpy=(0, π, π/2), i.e. flipped upside-down
+        (pitch=π) and rotated 90°. The pitch=π means the sensor's +Z axis
+        points DOWN, so a clockwise chassis rotation registers as counter-
+        clockwise in the sensor body frame — yaw sign is inverted.
+
+        Empirical verification: at rest both raw and chassis yaw are ~0, so
+        the offset is zero; only the sign needs flipping.
+        """
         q = msg.orientation
         siny_cosp = 2.0 * (q.w * q.z + q.x * q.y)
         cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
-        self.imu_yaw = math.atan2(siny_cosp, cosy_cosp)
+        self.imu_yaw = -math.atan2(siny_cosp, cosy_cosp)
     
     def get_yaw(self):
         """Get current yaw: prefer IMU (body truth) over wheel odometry"""
@@ -184,8 +193,11 @@ class DifferentialDriveControl(Node):
         # Calculate theoretical turn parameters (for logging)
         theoretical_omega, theoretical_time = self.calculate_90_turn(turn_type)
         
-        # Turn angular velocity: use a moderate speed for accuracy
-        turn_omega = 1.5  # rad/s — moderate speed for controllable turn
+        # Turn angular velocity: gentle so the chassis doesn't shake.
+        # Higher omega + skid-steer friction = chassis oscillation in Gazebo.
+        turn_omega = 0.9  # rad/s commanded peak. Skid-steer scrub eats some
+                          # of this; the closed-loop decel zone below brings
+                          # the chassis cleanly to 90° without overshoot.
         if direction == 'right':
             turn_omega = -turn_omega
         
@@ -225,45 +237,61 @@ class DifferentialDriveControl(Node):
         # +1 for left (positive omega), -1 for right (negative omega)
         direction_sign = 1.0 if turn_omega > 0 else -1.0
         
-        # Start the turn
+        # Start the turn — RAMP UP from 0 to turn_omega over 0.3 s to avoid
+        # commanding a step change in angular velocity that the physics
+        # engine reacts to with a violent jerk (chassis shakes/jumps).
         self.linear_velocity = turn_linear
-        self.angular_velocity = turn_omega
+        ramp_steps = 30  # 30 × 10 ms = 0.3 s
+        for i in range(1, ramp_steps + 1):
+            self.angular_velocity = turn_omega * (i / ramp_steps)
+            time.sleep(0.01)
         
         # Closed-loop: track absolute yaw displacement from start.
         # Uses IMU (actual body orientation) instead of wheel odometry
         # for accurate skid-steer turns.
         #
-        # Proportional deceleration near the target prevents overshoot.
-        # Without it the robot coasts ~1.1° past 90° due to inertia +
-        # the 10 ms polling interval at full speed.
-        DECEL_ZONE = 0.17   # ~10° – begin slowing down
-        MIN_SCALE  = 0.12   # floor so the robot doesn't stall
-        
+        # Empirical (Gazebo Fortress, 4-wheel skid-steer, omega=0.9 rad/s):
+        # the chassis coasts a few degrees after we publish zero. Tune
+        # COAST_OFFSET if landing is consistently off (decrease if
+        # overshooting, increase if undershooting).
+        COAST_OFFSET = math.radians(0.5)
+        TIMEOUT_S    = 12.0
+        STOP_AT      = max(target_angle - COAST_OFFSET, math.radians(2.0))
+
+        def _signed_disp():
+            d = self.get_yaw() - start_yaw
+            if d > math.pi:
+                d -= 2 * math.pi
+            elif d < -math.pi:
+                d += 2 * math.pi
+            return d * direction_sign
+
+        loop_start = time.time()
         while True:
-            time.sleep(0.005)  # 200 Hz check rate
-            
-            # Total yaw change since start
-            delta = self.get_yaw() - start_yaw
-            # Handle angle wrapping at ±π boundary
-            if delta > math.pi:
-                delta -= 2 * math.pi
-            elif delta < -math.pi:
-                delta += 2 * math.pi
-            
-            # Signed displacement in commanded direction
-            displacement = delta * direction_sign
-            if displacement >= target_angle:
+            time.sleep(0.01)
+
+            if time.time() - loop_start > TIMEOUT_S:
+                self.get_logger().warn(
+                    f"90° turn timed out after {TIMEOUT_S}s — aborting. "
+                    f"Check /imu and /odom rates; chassis may be stuck in Gazebo.")
                 break
-            
-            # Proportional slow-down in the last DECEL_ZONE radians
-            remaining = target_angle - displacement
-            if remaining < DECEL_ZONE:
-                scale = max(remaining / DECEL_ZONE, MIN_SCALE)
-                self.angular_velocity = turn_omega * scale
-                if turn_type == 'moving':
-                    self.linear_velocity = turn_linear * scale
+
+            displacement = _signed_disp()
+            if displacement >= STOP_AT:
+                break
         
-        # Stop the robot
+        # Stop the robot — brief counter-omega brake pulse to kill yaw
+        # inertia, then zero. Without the pulse the chassis coasts
+        # several degrees past target after we publish zero.
+        # IMPORTANT: the 20 Hz publish_velocity timer republishes
+        # self.angular_velocity, so we must set it (not just publish once)
+        # otherwise the timer immediately overwrites the brake.
+        self.linear_velocity = 0.0
+        self.angular_velocity = -direction_sign * 0.4
+        brake_twist = Twist()
+        brake_twist.angular.z = self.angular_velocity
+        self.cmd_vel_pub.publish(brake_twist)
+        time.sleep(0.05)
         self.linear_velocity = 0.0
         self.angular_velocity = 0.0
         # Immediately publish stop to minimize overshoot

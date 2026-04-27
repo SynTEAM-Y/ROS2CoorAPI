@@ -260,15 +260,27 @@ def generate_launch_description():
             '/arm_joint5_cmd_pos@std_msgs/msg/Float64]ignition.msgs.Double',
             '/grip_joint_cmd_pos@std_msgs/msg/Float64]ignition.msgs.Double',
             # Differential drive: ROS Twist -> Ignition Twist
-            '/cmd_vel@geometry_msgs/msg/Twist]ignition.msgs.Twist',
-            # Odometry: Ignition -> ROS
-            '/odom@nav_msgs/msg/Odometry[ignition.msgs.Odometry',
+            # The DiffDrive plugin in the URDF subscribes on the model-prefixed
+            # topic (it ignores leading-slash overrides). We bridge that and
+            # remap to /cmd_vel below so user nodes can keep using /cmd_vel.
+            '/model/x3plus/cmd_vel@geometry_msgs/msg/Twist]ignition.msgs.Twist',
+            # Odometry: Ignition -> ROS (also remapped to /odom below)
+            '/model/x3plus/odometry@nav_msgs/msg/Odometry[ignition.msgs.Odometry',
+            # IMU: Ignition -> ROS. Used by manual_control's closed-loop 90° turn
+            # to read real chassis yaw (wheel-odom yaw is wrong when wheels slip).
+            '/model/x3plus/imu@sensor_msgs/msg/Imu[ignition.msgs.IMU',
             # Joint states: Ignition Model -> ROS sensor_msgs/JointState
             f'{joint_state_topic}@sensor_msgs/msg/JointState[ignition.msgs.Model',
             # Simulation clock: Ignition -> ROS
             '/clock@rosgraph_msgs/msg/Clock[ignition.msgs.Clock',
         ],
         remappings=[
+            # User-facing topic names: keep /cmd_vel and /odom on the ROS side
+            # while the bridge actually talks to the model-prefixed Ignition
+            # topics that the DiffDrive plugin uses.
+            ('/model/x3plus/cmd_vel', '/cmd_vel'),
+            ('/model/x3plus/odometry', '/odom'),
+            ('/model/x3plus/imu', '/imu'),
             # Route raw physics joint states to /joint_states_raw.
             # The gripper_mimic_relay node filters out the frozen mimic joints
             # and republishes to /joint_states so robot_state_publisher can
