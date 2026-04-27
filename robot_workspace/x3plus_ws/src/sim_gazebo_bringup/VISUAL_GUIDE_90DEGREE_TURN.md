@@ -2,7 +2,7 @@
 
 > **Note:** This document uses **theoretical formula values** (v=0.5 m/s, ω=4.699 rad/s,
 > t=0.334s) to illustrate the differential drive math. The actual implementation in
-> `manual_control.py` uses **closed-loop IMU/odom feedback** with `turn_omega=1.5 rad/s`
+> `manual_control.py` uses **closed-loop IMU/odom feedback** with `turn_omega=0.9 rad/s`
 > — it does NOT rely on open-loop timing. The robot monitors yaw displacement and stops
 > when exactly 90° is reached, regardless of timing.
 
@@ -134,7 +134,7 @@ Wheel Speed (m/s) │ Angular Vel │ 90° Turn Time │ Visual
     0.8 m/s       │ 7.52 rad/s  │   0.209 sec   │ ─●
     1.0 m/s       │ 9.40 rad/s  │   0.167 sec   │ ●
 
-Note: Actual implementation commands turn_omega=1.5 rad/s directly
+Note: Actual implementation commands turn_omega=0.9 rad/s directly
 and uses closed-loop yaw feedback (not open-loop timing).
 
 Key insight (for open-loop formula): 
@@ -188,7 +188,7 @@ END: Turn time calculated
 
 ## Motor Control Signals During 90° Turn
 
-> **Theoretical diagram** — the actual implementation sends `cmd_vel.angular.z = 1.5`
+> **Theoretical diagram** — the actual implementation sends `cmd_vel.angular.z = 0.9`
 > and the DiffDrive plugin converts that to wheel velocities internally. The turn
 > ends via IMU/odom yaw feedback, not a fixed timer.
 
@@ -239,7 +239,7 @@ Start            During Turn          End
   ↓            ╱                      →
 Robot ────► Robot rotates ────────► Robot
   ↓          in place           (same location)
-            Closed-loop (yaw feedback, ~1.5 rad/s)
+            Closed-loop (yaw feedback, ~0.9 rad/s)
             No forward drift
 
 
@@ -286,7 +286,7 @@ CHOICE DEPENDS ON:
 ║                                                                ║
 ╠════════════════════════════════════════════════════════════════╣
 ║  ACTUAL IMPLEMENTATION (manual_control.py):                    ║
-║  Command:     cmd_vel.angular.z = 1.5 rad/s                    ║
+║  Command:     cmd_vel.angular.z = 0.9 rad/s                    ║
 ║  Feedback:    Closed-loop IMU/odom yaw tracking                ║
 ║  Stops when:  Yaw displacement ≥ π/2 (90°)                     ║
 ║  NOT timed — stops via sensor feedback                         ║
@@ -311,7 +311,7 @@ STEP 2: Execute 90° turn
 ┌─────────────────────────────────────────┐
 │ Press keys 1-4 for turn type            │
 │ Implementation:                         │
-│ - Sends cmd_vel.angular.z = 1.5 rad/s   │
+│ - Sends cmd_vel.angular.z = 0.9 rad/s   │
 │ - Monitors IMU yaw (or odom fallback)   │
 │ - Stops when yaw displacement ≥ π/2     │
 │ - Closed-loop: no fixed timing needed   │
@@ -350,5 +350,5 @@ STEP 3: Verify
   
         L = 0.2128m
         Theoretical: v=0.5 m/s, ω=4.699 rad/s, t=0.334s
-        Actual: turn_omega=1.5 rad/s, closed-loop yaw feedback
+        Actual: turn_omega=0.9 rad/s, closed-loop yaw feedback
 ```

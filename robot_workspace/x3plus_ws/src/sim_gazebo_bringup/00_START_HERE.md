@@ -36,8 +36,12 @@ For differential drive robot:
 │   t = 3.14159 × 0.2128 / (4 × 0.5)                         │
 │   t = 0.334 seconds           (open-loop estimate only)     │
 │                                                             │
-│ Actual cmd_vel angular.z = ±1.50 rad/s  ← NOT 4.699        │
-│   (lower value for stable closed-loop tracking)             │
+│ Actual cmd_vel angular.z = ±0.9 rad/s  ← NOT 4.699          │
+│   (lower commanded value because skid-steer scrub                │
+│    converts much of the wheel speed into lateral drag,            │
+│    not yaw rate; the closed-loop turn breaks early                │
+│    based on measured IMU yaw and a brief brake pulse              │
+│    so the chassis lands within ±0.4° of 90°.)                     │
 │                                                             │
 │ NOTE: Actual execution uses closed-loop                     │
 │ IMU (Gazebo) or odom (RViz) feedback → exact 90°            │
@@ -123,24 +127,25 @@ Type: IN_PLACE
   ω = 2v/L = 2×0.5/0.2128 = 4.6992 rad/s
   t = (π/2)/ω = 0.3343 s
 
-🤖 ACTUAL EXECUTION (closed-loop with odometry):
+🤖 ACTUAL EXECUTION (closed-loop with IMU yaw):
 ────────────────────────
-  Command ω: 1.50 rad/s
+  Command ω: 0.90 rad/s
   Linear: 0.00 m/s
   Target rotation: 90° (π/2 = 1.5708 rad)
-  Feedback: /odom yaw tracking
-══════════════════════════════════════════════════════════════════════════
+  Feedback: /imu yaw tracking (preferred over /odom)
+═══════════════════════════════════════════════════════════════════════
 
-90° left turn completed! (actual: 90.2°, error: +0.2°)
+  Yaw source: IMU
+90° left turn completed! (actual: 90.0°, error: +0.0°)
 ```
 
 ---
 
 ## Key Features
 
-1. **Gazebo Simulation** — Full physics with DiffDrive (4-wheel, asymmetric friction μ1=1.0/μ2=0.05), arm JointPositionControllers, IMU sensor
+1. **Gazebo Simulation** — Full physics with DiffDrive (4-wheel skid-steer, all wheels driven, symmetric μ1=μ2=2.0, kp=2e5/kd=50), arm JointPositionControllers, IMU sensor on `imu_link`
 2. **RViz Visualization** — RViz-only mode with `diff_drive_simulator`, map display, static `map→odom` TF
-3. **90° Turns** — Closed-loop via IMU (Gazebo) or odom (RViz) yaw tracking; theoretical ω = 4.699 rad/s, commanded ω = 1.50 rad/s
+3. **90° Turns** — Closed-loop via IMU (Gazebo, preferred) or odom (RViz) yaw tracking; theoretical ω = 4.699 rad/s, commanded ω = 0.9 rad/s, achieved accuracy ±0.4°
 4. **Arm Control** — 5-DOF arm + gripper. Each arm joint and `grip_joint` has an Ignition `JointPositionController` (PID). The 5 finger linkage joints are passive (no controller) — they follow `grip_joint` via the URDF `<mimic>` tag computed by `robot_state_publisher`.
 5. **Pick & Place** — Automated 12-step sequence in `arm_controller` (P key)
 6. **Odometry** — Ignition DiffDrive plugin → `/odom` (Gazebo) or `diff_drive_simulator` node (RViz-only); IMU crosscheck in turns

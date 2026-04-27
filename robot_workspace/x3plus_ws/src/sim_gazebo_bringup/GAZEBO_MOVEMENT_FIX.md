@@ -286,7 +286,8 @@ ros2 run robot_state_publisher robot_state_publisher --ros-args -p robot_descrip
    - Controls all 4 wheels: `front_left_wheel_joint`, `front_right_wheel_joint`, `back_left_wheel_joint`, `back_right_wheel_joint`
    - Uses wheel separation (0.2128m) and radius (0.04m)
    - Publishes odometry to `/odom`
-   - Wheel friction: μ1=1.0 (rolling), μ2=0.05 (lateral) — asymmetric for skid-steer turning
+   - Wheel friction: μ1=μ2=2.0 — symmetric on all 4 wheels (all driven by DiffDrive)
+   - Contact stiffness: kp=200000, kd=50
 
 ---
 

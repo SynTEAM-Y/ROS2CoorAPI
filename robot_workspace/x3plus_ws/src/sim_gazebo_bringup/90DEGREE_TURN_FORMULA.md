@@ -116,23 +116,34 @@ omega_theoretical = (2 * turn_wheel_speed) / wheel_separation  # = 4.699 rad/s
 turn_time_estimate = (math.pi * wheel_separation) / (4 * turn_wheel_speed)  # = 0.334 s
 
 # Actual command published on /cmd_vel:
-angular_z_command = ±1.50  # rad/s  ← NOT 4.699 rad/s
-                            # (lower value for stable, smooth closed-loop tracking)
-linear_x_command  = 0.0    # m/s  (in-place) or 0.3 m/s (arc turn)
+angular_z_command = ±0.9   # rad/s  ← NOT 4.699 rad/s
+                            # (lower commanded value because skid-steer
+                            #  scrub friction converts much of the wheel
+                            #  speed into lateral drag, not yaw rate)
+linear_x_command  = 0.0    # m/s  (in-place) or 0.15 m/s (arc turn)
 target_angle      = π/2    # = 1.5708 rad
 
-# Closed-loop execution:
+# Closed-loop execution (manual_control.py):
 # 1. Read start_yaw from /imu (Gazebo) or /odom (RViz-only)
-# 2. Publish cmd_vel with angular_z = ±1.50 rad/s
+# 2. Ramp angular_z 0 → ±0.9 rad/s over 0.3 s (avoids step-input jerk)
 # 3. Each cycle: compute delta = current_yaw − start_yaw
-# 4. When |delta| >= π/2 → publish zero cmd_vel → done
+# 4. When |delta| >= (π/2 − COAST_OFFSET=0.5°) → break
+# 5. Publish a brief counter-omega brake pulse (-0.4 rad/s × 50 ms)
+#    so the chassis stops near the target despite yaw inertia
+# 6. Publish zero cmd_vel → measured final actual is within ±0.4° of 90°
 ```
 
-> **Why 1.50 rad/s instead of 4.699 rad/s?**  
-> The 4.699 rad/s is the theoretical angular rate if wheels spin at ±0.5 m/s in
-> opposite directions. The commanded `/cmd_vel angular.z = 1.50 rad/s` is the
-> velocity setpoint sent to the DiffDrive plugin — it translates to different
-> individual wheel speeds via the plugin's internal controller.
+> **Why 0.9 rad/s instead of 4.699 rad/s?**  
+> The 4.699 rad/s is the theoretical angular rate if the wheels could produce
+> pure yaw with no scrub. In a 4-wheel skid-steer robot, achieving yaw requires
+> dragging the wheels sideways across the ground, which costs most of the
+> commanded velocity. Empirically 0.9 rad/s commanded delivers a stable, fast
+> turn while remaining easy to brake to a clean stop.
+>
+> **IMU yaw sign note:** The IMU is mounted with URDF rpy=(0, π, π/2). The
+> pitch=π flips the sensor's Z axis upside down, so a clockwise chassis
+> rotation reads as counter-clockwise on the sensor. `manual_control.py`'s
+> `imu_callback` therefore negates the extracted yaw to get true chassis yaw.
 
 ---
 
@@ -174,9 +185,8 @@ $$t_{360°} = 4 \times t_{90°} = 1.337 \text{ seconds}$$
 
 After executing a 90° turn, verify:
 
-- [ ] Robot rotated approximately 90 degrees
-- [ ] Robot stayed in roughly the same location (minimal forward drift)
-- [ ] Turn duration matches calculated time (±50ms tolerance)
+- [ ] Robot rotated approximately 90 degrees (± a few °; closed-loop trims to ±0.4°)
+- [ ] Robot stayed in roughly the same location (minimal forward drift on in-place turns)
 - [ ] All 4 wheels moved (left pair backward, right pair forward)
 - [ ] No excessive wheel slipping observed
 
@@ -220,7 +230,7 @@ ros2 run x3plus_examples manual_control
 # You'll see theoretical + actual execution parameters when pressing '1'-'4'
 #
 # Theoretical: ω = 2v/L = 4.699 rad/s, t = 0.3343 s
-# Actual: Command ω = 1.50 rad/s, closed-loop /odom yaw tracking
+# Actual: Command ω = 0.9 rad/s, closed-loop /imu yaw tracking
 ```
 
 ---

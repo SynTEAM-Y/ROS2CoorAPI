@@ -7,8 +7,10 @@ The x3plus URDF file has been **updated with wheel links and differential drive*
 ### What Was Added:
 ✅ 4 wheel links: front-left, front-right, back-left, back-right (collision-only geometry)
 ✅ Continuous joints for wheel rotation
-✅ Gazebo 4-wheel skid-steer differential drive plugin
-✅ Asymmetric friction (μ1=1.0, μ2=0.05) for skid-steer turning
+✅ Gazebo 4-wheel skid-steer differential drive plugin (drives ALL 4 wheels)
+✅ Symmetric high friction (μ1 = μ2 = 2.0) on all wheels
+✅ IMU sensor on `imu_link` (ignition-gazebo-imu-system) bridged to ROS `/imu`
+✅ Closed-loop 90° turn in `manual_control.py` using IMU yaw (±0.4° accuracy)
 
 ### All Parameters Are Clearly Commented:
 Every configurable parameter has **inline comments** showing:
@@ -99,7 +101,7 @@ Before modifying the URDF, you need to decide:
 - **Number of Wheels**: 4 (front-left, front-right, back-left, back-right) for skid-steer differential drive
 - **Motor Type**: Continuous revolute joints (no angle limits)
 - **Gear Ratio**: Mechanical advantage (usually 1.0 for direct drive)
-- **Friction**: Asymmetric (μ1=1.0 rolling, μ2=0.05 lateral) for skid-steer turning
+- **Friction**: Symmetric (μ1 = μ2 = 2.0) on all 4 wheels. With all 4 wheels driven by the DiffDrive plugin, skid-steer rotation works without friction asymmetry.
 
 ## Step 3: Create Wheel Mesh Files (Optional)
 
@@ -184,7 +186,7 @@ Edit the XACRO file and add the following **after** the base_link definition:
     <child link="${ns}/front_left_wheel"/>
     <origin xyz="0.1054 0.1064 -0.0388" rpy="0 0 0"/>
     <axis xyz="0 1 0"/>
-    <limit effort="10" velocity="2"/>
+    <limit effort="10" velocity="30"/>
 </joint>
 
 <!-- Front Right Wheel Joint -->
@@ -193,7 +195,7 @@ Edit the XACRO file and add the following **after** the base_link definition:
     <child link="${ns}/front_right_wheel"/>
     <origin xyz="0.1053 -0.1064 -0.0389" rpy="0 0 0"/>
     <axis xyz="0 1 0"/>
-    <limit effort="10" velocity="2"/>
+    <limit effort="10" velocity="30"/>
 </joint>
 
 <!-- Back Left Wheel Joint -->
@@ -202,7 +204,7 @@ Edit the XACRO file and add the following **after** the base_link definition:
     <child link="${ns}/back_left_wheel"/>
     <origin xyz="-0.1146 0.1064 -0.0396" rpy="0 0 0"/>
     <axis xyz="0 1 0"/>
-    <limit effort="10" velocity="2"/>
+    <limit effort="10" velocity="30"/>
 </joint>
 
 <!-- Back Right Wheel Joint -->
@@ -211,7 +213,7 @@ Edit the XACRO file and add the following **after** the base_link definition:
     <child link="${ns}/back_right_wheel"/>
     <origin xyz="-0.1146 -0.1064 -0.0395" rpy="0 0 0"/>
     <axis xyz="0 1 0"/>
-    <limit effort="10" velocity="2"/>
+    <limit effort="10" velocity="30"/>
 </joint>
 
 <!-- ================== MATERIAL DEFINITIONS ================== -->
@@ -232,7 +234,7 @@ Edit the XACRO file and add the following **after** the base_link definition:
 | `xyz` (origin) | Position relative to base_link | See section below | "X Y Z" |
 | `axis xyz` | Rotation axis (0 1 0 = Y-axis) | "0 1 0" for side wheels | "X Y Z" |
 | `effort` | Maximum torque | 5-100 N⋅m | float |
-| `velocity` | Maximum angular velocity | 1-10 rad/s | float |
+| `velocity` | Maximum angular velocity | 10-60 rad/s | float |
 
 ### Adjusting Wheel Position:
 
@@ -264,18 +266,24 @@ Create or update a file: `yahboomcar_description/urdf/gazebo_differential_drive.
     <gazebo>
         <plugin name="ignition::gazebo::systems::DiffDrive"
                 filename="ignition-gazebo-diff-drive-system">
-            <!-- 4 wheels: 2 left + 2 right -->
+            <!-- 4 wheels: 2 left + 2 right (drives ALL 4 for proper skid-steer) -->
             <left_joint>front_left_wheel_joint</left_joint>
             <left_joint>back_left_wheel_joint</left_joint>
             <right_joint>front_right_wheel_joint</right_joint>
             <right_joint>back_right_wheel_joint</right_joint>
             <wheel_separation>0.2128</wheel_separation>    <!-- Distance between left and right wheels -->
             <wheel_radius>0.04</wheel_radius>              <!-- Wheel radius -->
-            <max_linear_acceleration>1.0</max_linear_acceleration>
+            <max_linear_acceleration>3.0</max_linear_acceleration>
+            <max_angular_acceleration>3.0</max_angular_acceleration>
+            <max_linear_velocity>1.5</max_linear_velocity>
+            <max_angular_velocity>3.0</max_angular_velocity>
 
-            <!-- ROS topics and frame -->
-            <topic>cmd_vel</topic>
-            <odom_topic>odom</odom_topic>
+            <!-- Ignition Fortress silently ignores leading-slash topic
+                 overrides. Use the model-namespaced default and remap in
+                 the ros_gz_bridge in sim_gazebo_bringup/launch/gazebo.launch.py. -->
+            <topic>/model/x3plus/cmd_vel</topic>
+            <odom_topic>/model/x3plus/odometry</odom_topic>
+            <tf_topic>/model/x3plus/tf</tf_topic>
             <frame_id>odom</frame_id>
             <child_frame_id>base_footprint</child_frame_id>
 
@@ -358,34 +366,34 @@ For better wheel grip, add these gazebo properties to wheel links:
 ```xml
 <gazebo reference="${ns}/front_left_wheel">
     <material>Gazebo/Black</material>
-    <mu1>1.0</mu1>     <!-- Rolling friction (direction of travel) -->
-    <mu2>0.05</mu2>    <!-- Lateral friction (low for skid-steer turning) -->
-    <kp>1000000.0</kp> <!-- Contact stiffness -->
-    <kd>1.0</kd>       <!-- Contact damping -->
+    <mu1>2.0</mu1>      <!-- Rolling friction -->
+    <mu2>2.0</mu2>      <!-- Lateral friction -->
+    <kp>200000.0</kp>   <!-- Contact stiffness (softer than ODE default) -->
+    <kd>50.0</kd>       <!-- Contact damping -->
 </gazebo>
 
 <gazebo reference="${ns}/front_right_wheel">
     <material>Gazebo/Black</material>
-    <mu1>1.0</mu1>
-    <mu2>0.05</mu2>
-    <kp>1000000.0</kp>
-    <kd>1.0</kd>
+    <mu1>2.0</mu1>
+    <mu2>2.0</mu2>
+    <kp>200000.0</kp>
+    <kd>50.0</kd>
 </gazebo>
 
 <gazebo reference="${ns}/back_left_wheel">
     <material>Gazebo/Black</material>
-    <mu1>1.0</mu1>
-    <mu2>0.05</mu2>
-    <kp>1000000.0</kp>
-    <kd>1.0</kd>
+    <mu1>2.0</mu1>
+    <mu2>2.0</mu2>
+    <kp>200000.0</kp>
+    <kd>50.0</kd>
 </gazebo>
 
 <gazebo reference="${ns}/back_right_wheel">
     <material>Gazebo/Black</material>
-    <mu1>1.0</mu1>
-    <mu2>0.05</mu2>
-    <kp>1000000.0</kp>
-    <kd>1.0</kd>
+    <mu1>2.0</mu1>
+    <mu2>2.0</mu2>
+    <kp>200000.0</kp>
+    <kd>50.0</kd>
 </gazebo>
 ```
 

@@ -37,9 +37,9 @@ Use Ctrl+F (or Cmd+F on Mac) to find any parameter you want to change:
 | Wheel mass | `mass="0.1"` (in wheel_link) | Change to 0.2 for heavier wheels |
 | Wheel forward position | `x_pos="0.1054"` | Change to 0.1 to move wheels more forward |
 | Wheel separation | `y_pos="0.1064"` and `wheel_separation>0.2128` | Adjust both to match (left y - right y) |
-| Motor power | `max_wheel_torque>10` | Change to 20 for more power |
-| Motor speed | `velocity>2` | Change to 5 for faster rotation |
-| Friction | `mu1` and `mu2` | Current: μ1=1.0 (rolling), μ2=0.05 (lateral, low for skid-steer) |
+| Motor power | `<limit effort="10" ...>` | Change to 20 for more power |
+| Motor speed | `<limit ... velocity="30">` | Change to 60 for faster rotation |
+| Friction | `mu1` and `mu2` | Current: μ1 = μ2 = 2.0 (symmetric, on all 4 wheels) |
 
 ### Step 3: Make Your Changes
 
@@ -160,7 +160,7 @@ Add this macro definition near other macros (after `fixed_joint` macro):
         <origin xyz="${x_pos} ${y_pos} -0.036" rpy="0 0 0"/>
         <!-- Rotate around Y axis for side-to-side wheels -->
         <axis xyz="0 1 0"/>
-        <limit effort="10" velocity="2"/>
+        <limit effort="10" velocity="30"/>
         <dynamics damping="0.1" friction="0.0"/>
     </joint>
 </xacro:macro>
@@ -196,37 +196,37 @@ Add this **after** the base_link joint definitions (after the `<fixed_joint name
 <!-- Back Right Wheel Joint -->
 <wheel_joint name="back_right_wheel_joint" parent="base_link" child="back_right_wheel" x_pos="-0.1146" y_pos="-0.1064"/>
 
-<!-- Gazebo wheel friction properties (all 4 wheels) -->
+<!-- Gazebo wheel friction properties (all 4 wheels, symmetric mu) -->
 <gazebo reference="${ns}/front_left_wheel">
     <material>Gazebo/Black</material>
-    <mu1>1.0</mu1>
-    <mu2>0.05</mu2>
-    <kp>1000000.0</kp>
-    <kd>1.0</kd>
+    <mu1>2.0</mu1>
+    <mu2>2.0</mu2>
+    <kp>200000.0</kp>
+    <kd>50.0</kd>
 </gazebo>
 
 <gazebo reference="${ns}/front_right_wheel">
     <material>Gazebo/Black</material>
-    <mu1>1.0</mu1>
-    <mu2>0.05</mu2>
-    <kp>1000000.0</kp>
-    <kd>1.0</kd>
+    <mu1>2.0</mu1>
+    <mu2>2.0</mu2>
+    <kp>200000.0</kp>
+    <kd>50.0</kd>
 </gazebo>
 
 <gazebo reference="${ns}/back_left_wheel">
     <material>Gazebo/Black</material>
-    <mu1>1.0</mu1>
-    <mu2>0.05</mu2>
-    <kp>1000000.0</kp>
-    <kd>1.0</kd>
+    <mu1>2.0</mu1>
+    <mu2>2.0</mu2>
+    <kp>200000.0</kp>
+    <kd>50.0</kd>
 </gazebo>
 
 <gazebo reference="${ns}/back_right_wheel">
     <material>Gazebo/Black</material>
-    <mu1>1.0</mu1>
-    <mu2>0.05</mu2>
-    <kp>1000000.0</kp>
-    <kd>1.0</kd>
+    <mu1>2.0</mu1>
+    <mu2>2.0</mu2>
+    <kp>200000.0</kp>
+    <kd>50.0</kd>
 </gazebo>
 ```
 
@@ -247,12 +247,17 @@ Add this **at the end** of the URDF file, after all other tags but before the cl
         <wheel_separation>0.2128</wheel_separation>
         <wheel_radius>0.04</wheel_radius>
         
-        <!-- Motor control limits -->
-        <max_linear_acceleration>1.0</max_linear_acceleration>
+        <!-- Plugin acceleration / velocity limits (Ignition Fortress) -->
+        <max_linear_acceleration>3.0</max_linear_acceleration>
+        <max_angular_acceleration>3.0</max_angular_acceleration>
+        <max_linear_velocity>1.5</max_linear_velocity>
+        <max_angular_velocity>3.0</max_angular_velocity>
         
-        <!-- ROS topics -->
-        <topic>cmd_vel</topic>
-        <odom_topic>odom</odom_topic>
+        <!-- ROS topics (Fortress ignores leading-slash overrides on this plugin;
+             use the model-namespaced default and remap in the ros_gz_bridge) -->
+        <topic>/model/x3plus/cmd_vel</topic>
+        <odom_topic>/model/x3plus/odometry</odom_topic>
+        <tf_topic>/model/x3plus/tf</tf_topic>
         <frame_id>odom</frame_id>
         <child_frame_id>base_footprint</child_frame_id>
         
@@ -402,10 +407,19 @@ In the macro definition, change the cylinder radius:
 ```
 
 ### Motor Torque and Acceleration Limits
+
+In the current Ignition Fortress DiffDrive plugin block these are exposed as:
+
 ```xml
-<max_wheel_torque>10</max_wheel_torque>      <!-- Increase for more power -->
-<max_wheel_accel>1.0</max_wheel_accel>       <!-- Increase for faster acceleration -->
+<max_linear_acceleration>3.0</max_linear_acceleration>
+<max_angular_acceleration>3.0</max_angular_acceleration>
+<max_linear_velocity>1.5</max_linear_velocity>
+<max_angular_velocity>2.5</max_angular_velocity>
 ```
+
+> The older Gazebo Classic tags `<max_wheel_torque>` and `<max_wheel_accel>`
+> are NOT used by the Ignition Fortress DiffDrive plugin and are silently
+> ignored. Per-joint torque is enforced via the URDF `<limit effort="10"/>`.
 
 ## Expected Results After Setup
 

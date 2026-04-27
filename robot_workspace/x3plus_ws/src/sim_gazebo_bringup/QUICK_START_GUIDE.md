@@ -149,15 +149,15 @@ Type: IN_PLACE
   ω = 2v/L = 2×0.5/0.2128 = 4.6992 rad/s
   t = (π/2)/ω = 0.3343 s
 
-🤖 ACTUAL EXECUTION (closed-loop with odometry):
+🤖 ACTUAL EXECUTION (closed-loop with IMU yaw):
 ────────────────────────
-  Command ω: 1.50 rad/s
+  Command ω: 0.90 rad/s
   Linear: 0.00 m/s
   Target rotation: 90° (π/2 = 1.5708 rad)
-  Feedback: /odom yaw tracking
-════════════════════════════════════════════════════════════════════════
+  Feedback: /imu yaw tracking
+═══════════════════════════════════════════════════════════════════════
 
-90° left turn completed! (actual: 90.2°, error: +0.2°)
+90° left turn completed! (actual: 90.0°, error: +0.0°)
 ```
 
 ---
@@ -218,17 +218,16 @@ When robot executes `1` (90° left turn):
 ```
 Time       Rotation    Angular Velocity
 ────────────────────────────────────────
-0.00 sec    0°         1.50 rad/s
-0.05 sec   ~4°         1.50 rad/s
-0.10 sec   ~9°         1.50 rad/s
-0.50 sec   ~43°        1.50 rad/s
-0.80 sec   ~69°        1.50 rad/s
-1.05 sec   ~90°        STOP (odometry)
-0.26 sec   ~90°        0 rad/s (STOP)
+0.00 sec    0°         0 → 0.9 rad/s (0.3 s ramp)
+0.30 sec   ~10°        0.90 rad/s
+0.80 sec   ~50°        0.90 rad/s
+1.30 sec   ~89.5°      coast offset reached
+1.35 sec   ~90.0°      brake pulse -0.4 rad/s (50 ms)
+1.40 sec   ~90.0°      0 rad/s (STOP)
 ```
 
-Total time: ~0.25-0.30 seconds
-Final angle: 90° ± 5°
+Total time: ~1.4 seconds
+Final angle: 90° ± 0.4°
 
 ---
 

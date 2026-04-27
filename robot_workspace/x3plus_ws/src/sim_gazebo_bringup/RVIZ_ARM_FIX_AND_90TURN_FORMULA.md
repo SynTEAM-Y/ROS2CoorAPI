@@ -174,15 +174,15 @@ When the robot turns while moving forward:
      ω = 2v/L = 2×0.5/0.2128 = 4.6992 rad/s
      t = (π/2)/ω = 0.3343 s
 
-   🤖 ACTUAL EXECUTION (closed-loop with odometry):
+   🤖 ACTUAL EXECUTION (closed-loop with IMU yaw):
    ────────────────────────
-     Command ω: 1.50 rad/s
+     Command ω: 0.90 rad/s
      Linear: 0.00 m/s
      Target rotation: 90° (π/2 = 1.5708 rad)
-     Feedback: /odom yaw tracking
-   ══════════════════════════════════════════════════════════════════════════
+     Feedback: /imu yaw tracking
+   ═══════════════════════════════════════════════════════════════════════
 
-   90° left turn completed! (actual: 90.2°, error: +0.2°)
+   90° left turn completed! (actual: 90.0°, error: +0.0°)
    ```
 
 ---
@@ -238,8 +238,8 @@ self.turn_wheel_speed    = 0.5     # v in theoretical formula (m/s)
 ```
 
 > **Note**: `max_angular_velocity = 1.0 rad/s` applies to A/D keys only.
-> The 90° turn commands use `angular.z = ±1.50 rad/s` (hardcoded, separate from A/D).
-> Changing `max_angular_velocity` does NOT affect 90° turn speed.
+> The 90° turn commands use `angular.z = ±0.9 rad/s` (hardcoded as `turn_omega`,
+> separate from A/D). Changing `max_angular_velocity` does NOT affect 90° turn speed.
 
 **IMPORTANT**: The `wheel_separation` and `turn_wheel_speed` affect the **theoretical
 display values** (ω, t). The actual closed-loop turn stops by measuring π/2 rad of

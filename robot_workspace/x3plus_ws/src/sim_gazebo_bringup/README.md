@@ -417,9 +417,13 @@ Quick parameter table:
 | **Wheel Forward Pos** | front: 0.1054, back: -0.1146 | from mesh | Distance forward from chassis |
 | **Wheel Separation** | 0.2128 m (2×0.1064) | 0.2128 m | Track width between wheel centers |
 | **Motor Torque** | `effort="10"` | 10 N⋅m | Maximum power output |
-| **Motor Speed** | `velocity="2"` | 2 rad/s | Max rotation speed |
-| **Motor Acceleration** | `max_wheel_accel` | 1.0 rad/s² | How quickly motor speeds up |
-| **Wheel Friction** | `mu1>` and `mu2>` | μ1=1.0, μ2=0.05 | Rolling and lateral grip (asymmetric for skid-steer) |
+| **Motor Speed** | `velocity="30"` | 30 rad/s | Max wheel rotation speed (≈1.2 m/s linear) |
+| **Plugin Linear Accel** | `max_linear_acceleration` | 3.0 m/s² | Plugin-side acceleration limit |
+| **Wheel Friction** | `mu1>` and `mu2>` | μ1 = μ2 = 2.0 | Symmetric grip on all 4 wheels |
+| **Contact Stiffness** | `kp` / `kd` | 200000 / 50 | Wheel-ground contact (softer than ODE default) |
+| **Driven Wheels** | `<left_joint>` / `<right_joint>` | all 4 | DiffDrive plugin drives all 4 wheels (
+| **Contact Stiffness** | `kp` / `kd` | 200000 / 50 | Wheel-ground contact (softer than ODE default) |
+| **Driven Wheels** | `<left_joint>` / `<right_joint>` | all 4 | DiffDrive plugin drives all 4 wheels (skid-steer) |
 
 #### How to Customize Wheels
 

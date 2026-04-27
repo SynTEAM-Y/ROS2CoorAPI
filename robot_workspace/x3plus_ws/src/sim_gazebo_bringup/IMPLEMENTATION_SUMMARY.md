@@ -198,7 +198,8 @@ ros2 run x3plus_examples manual_control
 
 ```
 Four wheels with track width L = 0.2128 m
-Friction: μ1=1.0 (rolling), μ2=0.05 (lateral) — asymmetric for skid-steer
+Friction: μ1=μ2=2.0 — symmetric on all 4 wheels (all driven by DiffDrive)
+Contact stiffness: kp=200000, kd=50
 
 If left pair moves backward: v_L = -0.5 m/s  (front_left + back_left)
 If right pair moves forward: v_R = +0.5 m/s  (front_right + back_right)
@@ -224,13 +225,16 @@ t = 0.334 seconds
 
 The `manual_control` node sends:
 ```
-linear.x  = 0.0 m/s   (in-place turn) or 0.3 m/s (arc turn)
-angular.z = ±1.50 rad/s   (commanded ω, NOT the theoretical 4.699 rad/s)
+linear.x  = 0.0 m/s   (in-place turn) or 0.15 m/s (arc turn)
+angular.z = ±0.9 rad/s    (commanded ω, NOT the theoretical 4.699 rad/s)
 ```
 
 The 4.699 rad/s is the **theoretical wheel-speed-derived ω** (used for the open-loop
-time estimate). The commanded angular.z is lower because the PID + friction combo at
-1.5 rad/s tracks cleanly. Target rotation is always π/2 = 1.5708 rad.
+time estimate). The commanded angular.z is lower because the 4-wheel skid-steer
+scrub friction converts most of the wheel speed into lateral drag, not yaw rate.
+0.9 rad/s combined with a 0.3 s entry ramp, a 0.5° coast offset, and a brief
+-0.4 rad/s × 50 ms brake pulse delivers ±0.4° accuracy at the target
+π/2 = 1.5708 rad.
 
 ### Odometry Feedback During Turns
 
@@ -277,15 +281,15 @@ Type: IN_PLACE
   ω = 2v/L = 2×0.5/0.2128 = 4.6992 rad/s
   t = (π/2)/ω = 0.3343 s
 
-🤖 ACTUAL EXECUTION (closed-loop with odometry):
+🤖 ACTUAL EXECUTION (closed-loop with IMU yaw):
 ────────────────────────
-  Command ω: 1.50 rad/s
+  Command ω: 0.90 rad/s
   Linear: 0.00 m/s
   Target rotation: 90° (π/2 = 1.5708 rad)
-  Feedback: /odom yaw tracking
+  Feedback: /imu yaw tracking (IMU yaw is negated to compensate URDF mount rpy)
 ======================================================================
   Yaw source: IMU
-90° left turn completed! (actual: 90.2°, error: +0.2°)
+90° left turn completed! (actual: 90.0°, error: +0.0°)
 ```
 
 ---

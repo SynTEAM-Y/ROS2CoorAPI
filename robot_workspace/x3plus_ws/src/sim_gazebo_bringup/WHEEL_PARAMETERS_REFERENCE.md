@@ -152,39 +152,47 @@ wheel_separation = 0.1064 + 0.1064 = 0.2128
 
 ```xml
 <gazebo reference="front_left_wheel">
-    <mu1>1.0</mu1>      <!-- Rolling friction (direction of travel) -->
-    <mu2>0.05</mu2>     <!-- Lateral friction (sideways) - low for skid-steer turning -->
+    <mu1>2.0</mu1>      <!-- Rolling friction (direction of travel) -->
+    <mu2>2.0</mu2>      <!-- Lateral friction (sideways) -->
+    <kp>200000.0</kp>
+    <kd>50.0</kd>
 </gazebo>
 ```
 
-**Current values:** μ1=1.0 (rolling), μ2=0.05 (lateral)  
-**Why asymmetric?** Low lateral friction allows 4-wheel skid-steer to turn properly.
-With symmetric high friction, the robot cannot rotate in place.
+**Current values:** μ1 = μ2 = 2.0 (symmetric, applied to ALL 4 wheels)  
+**Why symmetric?** Earlier asymmetric attempts (μ2 = 0.05) caused chassis
+translation instead of clean rotation. With all 4 wheels driven by the
+DiffDrive plugin (not just the front pair), symmetric grip combined with
+skid-steer wheel scrub produces accurate in-place rotation. The closed-loop
+turn algorithm in `manual_control.py` then trims the final heading to within
+±0.4° of the 90° target.
 
 **Friction Values Guide:**
-- `0.05` = Very low lateral (allows skid-steer turning) - **Current μ2**
-- `0.5` = Medium grip
-- `0.8` = Good grip (carpet, asphalt)
-- `1.0` = Excellent rolling grip - **Current μ1**
+- `0.5`  = Low grip (chassis slides, hard to control)
+- `1.0`  = Medium grip
+- `2.0`  = Strong grip — **Current value for all 4 wheels**
+- `4.0`  = Very strong grip (chassis may lock instead of yawing)
 
 ---
 
 ### 8. **Contact Stiffness**
 **Location:** Gazebo properties for wheels  
-**Search for:** `<!-- CONTACT STIFFNESS: kp`
+**Search for:** `<kp>` / `<kd>`
 
 ```xml
-<kp>1000000.0</kp>    <!-- Edit this! -->
-<kd>1.0</kd>
+<kp>200000.0</kp>    <!-- Contact stiffness -->
+<kd>50.0</kd>        <!-- Contact damping -->
 ```
 
-**Default:** 1000000.0 (very stiff)  
-**Effect:** How rigid wheel contact is
+**Default:** kp = 200000.0, kd = 50.0 (softer + better damped than ODE
+defaults). Earlier values (kp=1e6, kd=1) made the chassis shake violently
+during turns; softer contact stops the high-frequency oscillation.
 
 **Stiffness Guide:**
-- `100000` = Soft wheels (deformable)
-- `500000` = Medium firmness
-- `1000000` = Stiff wheels (typical rubber) - **Default**
+- `100000`  = Soft wheels (deformable)
+- `200000`  = Current value
+- `500000`  = Stiff
+- `1000000` = Very stiff (legacy default — caused chassis shake)
 
 ---
 
@@ -193,7 +201,7 @@ With symmetric high friction, the robot cannot rotate in place.
 **Search for:** `<!-- MOTOR TORQUE LIMIT`
 
 ```xml
-<limit effort="10" velocity="2"/>
+<limit effort="10" velocity="30"/>
         ^^^^^^
       Edit this!
 ```
@@ -202,8 +210,8 @@ With symmetric high friction, the robot cannot rotate in place.
 **Effect:** Maximum force wheels can apply
 
 **Torque Examples:**
-- `5` = Light motor (slow acceleration)
-- `10` = Medium motor (balanced) - **Default**
+- `5`  = Light motor (slow acceleration)
+- `10` = Medium motor (balanced) — **Current**
 - `20` = Powerful motor (fast acceleration)
 - `50` = Very powerful motor (racing)
 
@@ -214,62 +222,65 @@ With symmetric high friction, the robot cannot rotate in place.
 **Search for:** `<!-- MOTOR SPEED LIMIT`
 
 ```xml
-<limit effort="10" velocity="2"/>
-                   ^^^^^^^^
+<limit effort="10" velocity="30"/>
+                   ^^^^^^^^^
                  Edit this!
 ```
 
-**Default:** 2 rad/s  
-**Effect:** Maximum rotation speed  
+**Default:** 30 rad/s. Wheel radius 0.04 m → max linear speed ≈ 1.2 m/s,
+which comfortably exceeds the DiffDrive plugin's `max_linear_velocity` of
+1.5 m/s for the chassis. The earlier value `velocity="2"` was a hard cap
+that prevented the wheels from reaching commanded speeds.  
 **Unit:** radians per second (rad/s)
 
 **Speed Examples:**
-- `1` = Slow rotation (crawling)
-- `2` = Medium speed (walking) - **Default**
-- `5` = Fast rotation (running)
-- `10` = Very fast (racing)
+- `2`  = Old (broken) value — 0.08 m/s linear cap
+- `10` = Slow but usable
+- `30` = Current (≈1.2 m/s linear)
+- `60` = Very fast
 
 ---
 
-### 11. **Motor Acceleration**
-**Location:** Gazebo plugin (bottom of file)  
-**Search for:** `<!-- ACCELERATION`
+### 11. **Plugin Acceleration / Velocity Limits**
+**Location:** `ignition-gazebo-diff-drive-system` plugin block  
+**Search for:** `max_linear_acceleration`
 
 ```xml
-<max_wheel_accel>1.0</max_wheel_accel>
-                 ^^^
-              Edit this!
+<max_linear_acceleration>3.0</max_linear_acceleration>
+<max_angular_acceleration>3.0</max_angular_acceleration>
+<max_linear_velocity>1.5</max_linear_velocity>
+<max_angular_velocity>3.0</max_angular_velocity>
 ```
 
-**Default:** 1.0 rad/s²  
-**Effect:** How quickly motor can change speed
+**Effect:** Hard limits the plugin enforces on `cmd_vel` before sending wheel
+commands. The legacy Gazebo Classic tags `max_wheel_torque` and
+`max_wheel_accel` are NOT used by the Ignition Fortress DiffDrive plugin.
 
 **Acceleration Examples:**
-- `0.5` = Smooth, gradual acceleration
-- `1.0` = Normal acceleration - **Default**
-- `2.0` = Snappy, quick response
-- `5.0` = Very aggressive acceleration
+- `1.0`  = Smooth, gradual
+- `3.0`  = Current value (snappy but not violent)
+- `6.0`  = Aggressive
 
 ---
 
-### 12. **Update Rate**
-**Location:** Gazebo plugin (bottom of file)  
-**Search for:** `<!-- UPDATE RATE:`
+### 12. **Odometry Publish Rate**
+**Location:** `ignition-gazebo-diff-drive-system` plugin block  
+**Search for:** `odom_publish_frequency`
 
 ```xml
-<update_rate>30</update_rate>
-             ^^
-          Edit this!
+<odom_publish_frequency>30</odom_publish_frequency>
 ```
 
-**Default:** 30 Hz (updates per second)  
-**Effect:** How often Gazebo updates wheel physics
+**Default:** 30 Hz. The plugin publishes `/model/x3plus/odometry`, which the
+ros_gz_bridge in `gazebo.launch.py` remaps to ROS `/odom` at the same rate.
+The IMU sensor on `imu_link` runs at 100 Hz (bridged to `/imu` at \u224852 Hz
+in practice on a typical laptop) and is preferred by `manual_control.py`'s
+closed-loop turn for ground-truth chassis yaw.
 
 **Typical Values:**
-- `10` = Low frequency (faster sim, less accurate)
-- `30` = Normal frequency (good balance) - **Default**
-- `50` = High frequency (slower sim, more accurate)
-- `100` = Very high frequency (very accurate, slow)
+- `10`  = Low frequency (faster sim, less accurate)
+- `30`  = Current value (good balance)
+- `100` = Very high frequency (matches IMU rate)
 
 ---
 
@@ -278,11 +289,11 @@ With symmetric high friction, the robot cannot rotate in place.
 ### Example 1: Make the Robot Faster
 ```bash
 # In wheel_joint macro, change:
-velocity="2"      →   velocity="5"
+velocity="30"     →   velocity="60"
 
 # In gazebo plugin, change:
-max_wheel_torque>10    →   max_wheel_torque>20
-max_wheel_accel>1.0    →   max_wheel_accel>3.0
+max_linear_velocity>1.5    →   max_linear_velocity>3.0
+max_linear_acceleration>3.0    →   max_linear_acceleration>6.0
 ```
 
 ### Example 2: Make the Robot with Bigger Wheels
@@ -297,10 +308,10 @@ wheel_diameter>0.08    →   wheel_diameter>0.10
 
 ### Example 3: Make the Robot More Slippery (Low Grip)
 ```bash
-# Current values: mu1=1.0 (rolling), mu2=0.05 (lateral)
+# Current values: mu1=mu2=2.0 on all 4 wheels
 # To reduce grip:
-mu1>1.0    →   mu1>0.4
-mu2>0.05   →   mu2>0.02
+mu1>2.0    →   mu1>0.8
+mu2>2.0    →   mu2>0.8
 ```
 
 ### Example 4: Make Wheels Wider
