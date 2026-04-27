@@ -421,8 +421,6 @@ Quick parameter table:
 | **Plugin Linear Accel** | `max_linear_acceleration` | 3.0 m/s² | Plugin-side acceleration limit |
 | **Wheel Friction** | `mu1>` and `mu2>` | μ1 = μ2 = 2.0 | Symmetric grip on all 4 wheels |
 | **Contact Stiffness** | `kp` / `kd` | 200000 / 50 | Wheel-ground contact (softer than ODE default) |
-| **Driven Wheels** | `<left_joint>` / `<right_joint>` | all 4 | DiffDrive plugin drives all 4 wheels (
-| **Contact Stiffness** | `kp` / `kd` | 200000 / 50 | Wheel-ground contact (softer than ODE default) |
 | **Driven Wheels** | `<left_joint>` / `<right_joint>` | all 4 | DiffDrive plugin drives all 4 wheels (skid-steer) |
 
 #### How to Customize Wheels
