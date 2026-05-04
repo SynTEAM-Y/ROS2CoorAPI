@@ -8,7 +8,7 @@ The structure separates communication layers from robot specific functionality f
 
 ## Repository-Structure
 
-- [**`communication_infra/`**](./communication_infra/) – Communication layer: AgentHub + infra runtime
+- [**`communication_infra/`**](./communication_infra/) –Communication layer: AgentHub + infra runtime
     - [**`AgentHub/`**](./communication_infra/AgentHub/) – High-level agent / feed / sequence configs
     - [**`Scenarios/`**](./communication_infra/Scenarios/) – Scenario programs (yaml files)
     - [**`logs/`**](./communication_infra/logs/) – Runtime logs
