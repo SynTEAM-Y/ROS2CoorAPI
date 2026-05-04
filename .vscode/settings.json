@@ -1,0 +1,17 @@
+{
+    "ROS2.distro": "humble",
+    "python.autoComplete.extraPaths": [
+        "/home/othman/ROS2Coordination/robot_workspace/x3plus_ws/build/x3plus_examples",
+        "/home/othman/ROS2Coordination/robot_workspace/x3plus_ws/install/x3plus_examples/lib/python3.10/site-packages",
+        "/home/othman/ROS2Coordination/robot_workspace/x3plus_ws/install/astra_camera_msgs/local/lib/python3.10/dist-packages",
+        "/opt/ros/humble/lib/python3.10/site-packages",
+        "/opt/ros/humble/local/lib/python3.10/dist-packages"
+    ],
+    "python.analysis.extraPaths": [
+        "/home/othman/ROS2Coordination/robot_workspace/x3plus_ws/build/x3plus_examples",
+        "/home/othman/ROS2Coordination/robot_workspace/x3plus_ws/install/x3plus_examples/lib/python3.10/site-packages",
+        "/home/othman/ROS2Coordination/robot_workspace/x3plus_ws/install/astra_camera_msgs/local/lib/python3.10/dist-packages",
+        "/opt/ros/humble/lib/python3.10/site-packages",
+        "/opt/ros/humble/local/lib/python3.10/dist-packages"
+    ]
+}

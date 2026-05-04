@@ -191,7 +191,15 @@ def generate_launch_description():
     print(f'[sim_gazebo_bringup] Loading map: {plain_map_file}')
     
     # Paths
-    xacro_file = os.path.join(yahboomcar_description_dir, 'urdf', 'yahboomcar_X3plus.urdf.xacro')
+    # Prefer the in-package URDF (your modified version installed by
+    # sim_gazebo_bringup). Fall back to upstream yahboomcar_description.
+    in_pkg_xacro = os.path.join(sim_gazebo_bringup_dir, 'urdf', 'yahboomcar_X3plus.urdf.xacro')
+    if os.path.isfile(in_pkg_xacro):
+        xacro_file = in_pkg_xacro
+        print(f'[sim_gazebo_bringup] Using in-package URDF: {xacro_file}')
+    else:
+        xacro_file = os.path.join(yahboomcar_description_dir, 'urdf', 'yahboomcar_X3plus.urdf.xacro')
+        print(f'[sim_gazebo_bringup] Falling back to upstream URDF: {xacro_file}')
     rviz_config_file = os.path.join(sim_gazebo_bringup_dir, 'rviz', 'gazebo_view.rviz')
 
     # Get configuration values

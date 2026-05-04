@@ -166,7 +166,17 @@ def generate_launch_description():
     sim_gazebo_bringup_dir = get_package_share_directory('sim_gazebo_bringup')
     
     # Paths
-    xacro_file = os.path.join(yahboomcar_description_dir, 'urdf', 'yahboomcar_X3plus.urdf.xacro')
+    # Prefer the modified URDF shipped with sim_gazebo_bringup (this is "your
+    # work, isolated" — see scripts/README.md). Fall back to the upstream
+    # yahboomcar_description URDF if the in-package one was not installed
+    # (e.g. cmake step did not run).
+    in_pkg_xacro = os.path.join(sim_gazebo_bringup_dir, 'urdf', 'yahboomcar_X3plus.urdf.xacro')
+    if os.path.isfile(in_pkg_xacro):
+        xacro_file = in_pkg_xacro
+        print(f'[sim_gazebo_bringup] Using in-package URDF: {xacro_file}')
+    else:
+        xacro_file = os.path.join(yahboomcar_description_dir, 'urdf', 'yahboomcar_X3plus.urdf.xacro')
+        print(f'[sim_gazebo_bringup] Falling back to upstream URDF: {xacro_file}')
     rviz_config_file = os.path.join(yahboomcar_description_dir, 'rviz', 'yahboomcar.rviz')
 
     # Resolve `world` (already chosen interactively above unless world:= was
@@ -259,6 +269,15 @@ def generate_launch_description():
             '/arm_joint4_cmd_pos@std_msgs/msg/Float64]ignition.msgs.Double',
             '/arm_joint5_cmd_pos@std_msgs/msg/Float64]ignition.msgs.Double',
             '/grip_joint_cmd_pos@std_msgs/msg/Float64]ignition.msgs.Double',
+            '/grip_master_target@std_msgs/msg/Float64]ignition.msgs.Double',
+            # Mimic finger joint commands: fanned out from /grip_joint_cmd_pos by
+            # gripper_mimic_relay (so the fingers actually move in Gazebo physics,
+            # not just in RViz via URDF <mimic>).
+            '/llink_joint1_cmd_pos@std_msgs/msg/Float64]ignition.msgs.Double',
+            '/llink_joint2_cmd_pos@std_msgs/msg/Float64]ignition.msgs.Double',
+            '/llink_joint3_cmd_pos@std_msgs/msg/Float64]ignition.msgs.Double',
+            '/rlink_joint2_cmd_pos@std_msgs/msg/Float64]ignition.msgs.Double',
+            '/rlink_joint3_cmd_pos@std_msgs/msg/Float64]ignition.msgs.Double',
             # Differential drive: ROS Twist -> Ignition Twist
             # The DiffDrive plugin in the URDF subscribes on the model-prefixed
             # topic (it ignores leading-slash overrides). We bridge that and

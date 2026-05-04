@@ -9,10 +9,22 @@ This is useful for:
 
 Usage:
     ros2 launch sim_gazebo_bringup robot_rviz.launch.py
+
+Optional arguments:
+    use_sim_time:=true               - Use simulated time (default: false)
+    map:=<name>                      - Map to load. Options come from the
+                                       maps/ directory of this package.
+                                       Defaults to 'plain_map'. Examples:
+                                         map:=plain_map
+                                         map:=turtlebot3_world
+                                         map:=willow
+                                       You may also pass an absolute path to
+                                       a .yaml map file.
 """
 
 import os
 import re
+import sys
 import subprocess
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -20,6 +32,72 @@ from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch.actions import ExecuteProcess
+
+def convert_package_uris_to_file_uris(urdf_content):
+    """
+    Convert package:// URIs in URDF to file:// URIs for RViz compatibility.
+    
+    RViz can have issues resolving package:// URIs. Using file:// URIs ensures
+    meshes load correctly.
+    
+    Example:
+        package://yahboomcar_description/meshes/X3plus/visual/base_link.STL
+        becomes:
+        file:///path/to/install/yahboomcar_description/share/yahboomcar_description/meshes/X3plus/visual/base_link.STL
+    """
+    def replace_package_uri(match):
+        package_uri = match.group(0)
+        # Extract package name and file path
+        # Format: package://package_name/relative/path
+        match_parts = re.match(r'package://([^/]+)/(.*)', package_uri)
+        if match_parts:
+            package_name = match_parts.group(1)
+            relative_path = match_parts.group(2)
+            try:
+                package_share_dir = get_package_share_directory(package_name)
+                absolute_path = os.path.join(package_share_dir, relative_path)
+                # Convert to file:// URI (must have 3 slashes: file:/// for absolute paths)
+                # Ensure path starts with / for proper file:/// format
+                if not absolute_path.startswith('/'):
+                    absolute_path = '/' + absolute_path
+                file_uri = f'file://{absolute_path}'
+                return file_uri
+            except Exception as e:
+                print(f"Warning: Could not resolve package {package_name}: {e}")
+                return package_uri
+        return package_uri
+    
+    # Replace all package:// URIs with file:// URIs
+    modified_content = re.sub(r'package://[^"\'<\s]+', replace_package_uri, urdf_content)
+    return modified_content
+
+
+def _interactive_pick(label, choices, default):
+    """Prompt the user to pick one of `choices`. See gazebo.launch.py for behaviour."""
+    prefix = f'{label}:='
+    for a in sys.argv:
+        if a.startswith(prefix):
+            return a.split(':=', 1)[1]
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return default
+    print()
+    print(f'  Select a {label}:')
+    for i, name in enumerate(choices, 1):
+        marker = '  (default)' if name == default else ''
+        print(f'    [{i}] {name}{marker}')
+    while True:
+        try:
+            raw = input(f'  Enter number 1-{len(choices)} or name [default: {default}]: ').strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return default
+        if raw == '':
+            return default
+        if raw.isdigit() and 1 <= int(raw) <= len(choices):
+            return choices[int(raw) - 1]
+        if raw in choices:
+            return raw
+        print(f'  ! Not a valid choice. Try a number 1-{len(choices)} or one of: {", ".join(choices)}')
 
 # Fix for snap libc/pthread conflicts on some Ubuntu systems
 # When ROS is installed via snap, it may try to load incompatible snap libc libraries
@@ -74,9 +152,54 @@ def generate_launch_description():
     # Get package shares
     yahboomcar_description_dir = get_package_share_directory('yahboomcar_description')
     sim_gazebo_bringup_dir = get_package_share_directory('sim_gazebo_bringup')
+
+    # Discover available maps in the installed maps/ directory so the user gets
+    # a helpful list if they pick a name that doesn't exist.
+    maps_dir = os.path.join(sim_gazebo_bringup_dir, 'maps')
+    if os.path.isdir(maps_dir):
+        available_maps = sorted(
+            os.path.splitext(f)[0]
+            for f in os.listdir(maps_dir)
+            if f.endswith('.yaml')
+        )
+    else:
+        available_maps = []
+    map_arg = DeclareLaunchArgument(
+        'map',
+        default_value='plain_map',
+        description=(
+            'Map to load (basename without .yaml, or absolute path to a .yaml file). '
+            'Available: ' + (', '.join(available_maps) if available_maps else '(none)')
+        ),
+    )
+
+    # Interactive picker (only if map:= not provided and stdin is a TTY).
+    requested_map = _interactive_pick(
+        'map', available_maps if available_maps else ['plain_map'], 'plain_map'
+    )
+
+    if os.path.isabs(requested_map) and os.path.isfile(requested_map):
+        plain_map_file = requested_map
+    else:
+        plain_map_file = os.path.join(maps_dir, requested_map + '.yaml')
+        if not os.path.isfile(plain_map_file):
+            raise RuntimeError(
+                f"Map '{requested_map}' not found. "
+                f"Available: {', '.join(available_maps)}. "
+                f"Pass map:=<name> or an absolute path to a .yaml file."
+            )
+    print(f'[sim_gazebo_bringup] Loading map: {plain_map_file}')
     
     # Paths
-    xacro_file = os.path.join(yahboomcar_description_dir, 'urdf', 'yahboomcar_X3plus.urdf.xacro')
+    # Prefer the in-package URDF (your modified version installed by
+    # sim_gazebo_bringup). Fall back to upstream yahboomcar_description.
+    in_pkg_xacro = os.path.join(sim_gazebo_bringup_dir, 'urdf', 'yahboomcar_X3plus.urdf.xacro')
+    if os.path.isfile(in_pkg_xacro):
+        xacro_file = in_pkg_xacro
+        print(f'[sim_gazebo_bringup] Using in-package URDF: {xacro_file}')
+    else:
+        xacro_file = os.path.join(yahboomcar_description_dir, 'urdf', 'yahboomcar_X3plus.urdf.xacro')
+        print(f'[sim_gazebo_bringup] Falling back to upstream URDF: {xacro_file}')
     rviz_config_file = os.path.join(sim_gazebo_bringup_dir, 'rviz', 'gazebo_view.rviz')
 
     # Get configuration values
@@ -107,10 +230,15 @@ def generate_launch_description():
             "sudo apt install ros-humble-xacro"
         )
     
+    # Convert package:// URIs to file:// URIs for RViz mesh loading
+    # RViz can have trouble with package:// URIs, file:// works more reliably
+    robot_description_content = convert_package_uris_to_file_uris(robot_description_content)
+    
     # Fix link/joint names: remove leading slashes from names
     # XACRO with empty ns="/" (/$) generates "/base_link" instead of "base_link"
     # This happens because properties use ${ns}/link_name which becomes //link_name (double slash)
     # after removing, we get just /link_name. We need to remove these leading slashes.
+    # NOTE: This only affects TF frame names, not file paths (which were already converted above)
     robot_description_content = re.sub(r' name="/', r' name="', robot_description_content)
     robot_description_content = re.sub(r' parent="/', r' parent="', robot_description_content)
     robot_description_content = re.sub(r' child="/', r' child="', robot_description_content)
@@ -153,15 +281,14 @@ def generate_launch_description():
 
     # Map Publisher - Loads and publishes map from files
     # Displays the map in RViz so you can see robot movement in context
-    maps_dir = os.path.expanduser('~/ROS2Coordination/robot_workspace/x3plus_ws/maps')
-    plain_map_file = os.path.join(maps_dir, 'plain_map.yaml')
+    # (path resolved above from the `map` launch argument)
     
     map_publisher_node = Node(
         package='x3plus_examples',
         executable='map_publisher',
         name='map_publisher',
         output='screen',
-        arguments=['--map-path', plain_map_file]
+        parameters=[{'map_path': plain_map_file}],
     )
 
     # Static Transform: map to odom
@@ -179,6 +306,7 @@ def generate_launch_description():
 
     return LaunchDescription([
         use_sim_time_arg,
+        map_arg,
         robot_state_publisher_node,
         rviz_proc,
         diff_drive_sim_node,

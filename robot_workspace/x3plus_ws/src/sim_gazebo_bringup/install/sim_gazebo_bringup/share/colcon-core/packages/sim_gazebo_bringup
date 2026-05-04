@@ -1,1 +1,1 @@
-joint_state_publisher:robot_state_publisher:ros_gz_sim:rviz2:yahboomcar_description
+geometry_msgs:joint_state_publisher:nav_msgs:rclpy:robot_state_publisher:ros_gz_sim:rviz2:sensor_msgs:std_msgs:xacro:yahboomcar_description
