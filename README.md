@@ -6,7 +6,7 @@ The structure separates communication layers from robot specific functionality f
 
 ---
 
-## Repository Structure
+## Repository-Structure
 
 - [**`communication_infra/`**](./communication_infra/) – Communication layer: AgentHub + infra runtime
     - [**`AgentHub/`**](./communication_infra/AgentHub/) – High-level agent / feed / sequence configs
