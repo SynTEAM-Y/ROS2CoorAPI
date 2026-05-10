@@ -1,0 +1,1 @@
+/home/assoc/ROS2CoorAPI/communication_infra/build/projectn_interfaces/rosidl_typesupport_introspection_cpp/projectn_interfaces/srv/detail/get_msg_id__rosidl_typesupport_introspection_cpp.hpp
