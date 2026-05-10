@@ -1,4 +1,1 @@
-
-sensor_msgs/CameraInfo info
-bool success
-string message
+/home/assoc/ROS2CoorAPI/robot_workspace/x3plus_ws/build/astra_camera_msgs/rosidl_cmake/srv/GetCameraInfo_Response.msg

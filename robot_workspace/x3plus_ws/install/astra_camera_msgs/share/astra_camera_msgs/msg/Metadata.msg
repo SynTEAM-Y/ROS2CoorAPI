@@ -1,2 +1,1 @@
-std_msgs/Header header
-string json_data
+/home/assoc/ROS2CoorAPI/robot_workspace/x3plus_ws/src/third_party/ros2_astra_camera/astra_camera_msgs/msg/Metadata.msg

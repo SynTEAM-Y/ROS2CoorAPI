@@ -1,3 +1,1 @@
-std_msgs/Header header
-float64[9] rotation
-float64[3] translation
+/home/assoc/ROS2CoorAPI/robot_workspace/x3plus_ws/src/third_party/ros2_astra_camera/astra_camera_msgs/msg/Extrinsics.msg

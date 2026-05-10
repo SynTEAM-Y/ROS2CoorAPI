@@ -82,7 +82,7 @@ ros2 launch x3plus_multi_bringup one_robot.launch.py \
 ros2 launch x3plus_multi_bringup multi_robot.launch.py \
   robots_id:=123,456,789 \
   prefix:=robot \
-  map:=/home/assoc/Downloads/ROS2CoorAPI/robot_workspace/x3plus_ws/maps/circular_map.yaml
+  map:=/home/assoc/ROS2CoorAPI/robot_workspace/x3plus_ws/maps/circular_map.yaml
 ```
 
 ---
