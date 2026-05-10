@@ -1,28 +1,29 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-ProjectN • Robot Node 
-+ Auto-capture COORDS from DOWN text like: "Rescue [x, y]?"
-+ Explicit IDLE block (no sendable): use `>idle` (or `>__idle__`) with only "commands to execute:"
-  - Runs once on scenario load.
-  - Runs again automatically after any winning program finishes.
+ProjectN • Robot Node
+(YAML-optional commands map; fully scoped I/O; ack-gated exec; 'start' random/fixed)
++ Agent auto-spawn (named) in a new terminal and auto-attach with retries.
++ Properties (getters/setters) and overload-style type hints (no behavior change).
 
-Behavior summary:
-- On scenario load → run IDLE block steps (now: only once attached; see code).
-- On trigger DOWN:
-    • robot sends its '!' (pre-ack protocol unchanged).
-    • if lose → stay in idle (do nothing).
-    • if win  → run that program's steps, then run IDLE steps again (return to idle).
-
-Notes:
-- IDLE block does NOT contain a send-text line ending with '!'. It is never sent or triggered.
+Launch examples:
+  ros2 run projectn robot_node --robot R1 --commands ~/.projectn/robot_commands.yaml
+  START_COMMANDS_FILE=~/.projectn/robot_commands.yaml ros2 run projectn robot_node --robot R1
 """
 
 from __future__ import annotations
-import argparse, os, sys, time, threading, subprocess, shutil, re, signal
-from pathlib import Path
-from typing import Optional, Dict, List, Tuple
+import argparse
+import os
+import subprocess
+import sys
+import threading
+import time
+import secrets
+import random
+import shutil
 from collections import deque
+from pathlib import Path
+from typing import Optional, Sequence, overload, Dict, List
 
 import rclpy
 from rclpy.executors import MultiThreadedExecutor
@@ -30,19 +31,26 @@ from rclpy.node import Node
 from std_msgs.msg import String as RosString
 
 try:
-    import yaml  # for parsing the inline 'commands:' block
+    import yaml  # PyYAML
 except Exception:
     yaml = None
 
 
-# ---------- helpers ----------
+# ---------------- Utilities ----------------
+def _norm(s: str) -> str:
+    return (s or "").strip().lower()
+
+
 def _compose_shell(cmd: str) -> str:
+    """If ROS_SETUP is set, source it before the command so 'ros2 ...' works."""
     setup = os.environ.get("ROS_SETUP", "").strip()
     if setup:
         return f'source "{setup}" >/dev/null 2>&1; {cmd}'
     return cmd
 
-def exec_shell_any(cmd: str, timeout: Optional[int] = None) -> Tuple[int, str, str]:
+
+def exec_shell_any(cmd: str, timeout: Optional[int] = None) -> tuple[int, str, str]:
+    """Execute arbitrary shell command string exactly as given."""
     if timeout is None:
         try:
             timeout = int(os.environ.get("EXEC_TIMEOUT", "60"))
@@ -65,393 +73,176 @@ def exec_shell_any(cmd: str, timeout: Optional[int] = None) -> Tuple[int, str, s
     except Exception as e:
         return 127, "", f"[exec-error] {e}"
 
-def _norm_base(token: str) -> str:
+
+def _which_terminal() -> Optional[list]:
     """
-    Normalize trigger names:
-
-    - Strip ONE trailing '?' or '!' (Rescue? / Rescue! -> Rescue)
-    - Keep ONLY the first word (before any space), so that:
-        "Rescue [1.0, 2.0]!" -> "Rescue"
-        "Rescue [1.0, 2.0]"  -> "Rescue"
-        "Rescue?"            -> "Rescue"
-        "Rescue"             -> "Rescue"
+    Return a terminal launch command (argv list) that supports: <term> -- bash -lc "<cmd>"
+    Preference order is tuned for common Linux desktops.
     """
-    if not token:
-        return ""
-    s = token.strip()
-    # Strip one trailing ? or !
-    if s.endswith("?") or s.endswith("!"):
-        s = s[:-1].strip()
-    # Only first word
-    return s.split()[0]
+    candidates = [
+        ("gnome-terminal", ["gnome-terminal", "--", "bash", "-lc"]),
+        ("x-terminal-emulator", ["x-terminal-emulator", "-e", "bash", "-lc"]),
+        ("konsole", ["konsole", "-e", "bash", "-lc"]),
+        ("xfce4-terminal", ["xfce4-terminal", "--command", "bash -lc"]),
+        ("tilix", ["tilix", "-e", "bash", "-lc"]),
+        ("kitty", ["kitty", "bash", "-lc"]),
+        ("alacritty", ["alacritty", "-e", "bash", "-lc"]),
+        ("lxterminal", ["lxterminal", "-e", "bash", "-lc"]),
+        ("xterm", ["xterm", "-e", "bash", "-lc"]),
+        ("urxvt", ["urxvt", "-e", "bash", "-lc"]),
+    ]
+    for name, argv in candidates:
+        if shutil.which(name):
+            return argv
+    return None
 
 
-# coordinates regex — matches [x, y] with optional decimals / signs
-_COORD_RE = re.compile(r"\[\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\]")
+def _spawn_agent_terminal(agent: str) -> bool:
+    """
+    Spawn the Agent Hub in a new terminal, inheriting current env.
+    Keeps the terminal open after the program exits (via 'exec bash').
+    """
+    term = _which_terminal()
+    if not term:
+        print("[spawn] no terminal emulator found (gnome-terminal/xterm/etc). Start agent manually.")
+        return False
+
+    launch = _compose_shell(f'ros2 run projectn agent_hub_robot --agent "{agent}"; exec bash')
+    try:
+        if term[0] in ("xfce4-terminal",):
+            argv = term + [launch]
+        else:
+            argv = term + [launch]
+        subprocess.Popen(argv, env=os.environ)
+        print(f"[spawn] agent '{agent}' launched in a new terminal.")
+        return True
+    except Exception as e:
+        print(f"[spawn] failed to spawn terminal: {e}")
+        return False
 
 
-# ---------- scenario parsing ----------
-class Program:
-    __slots__ = ("recv_name_raw", "recv_base", "send_text", "win_cmds", "rival_recv_raw", "rival_base")
-    def __init__(self, recv_name_raw: str, send_text: str, win_cmds: List[str], rival_recv_raw: str):
-        self.recv_name_raw = recv_name_raw              # e.g., "Rescue?"
-        self.recv_base = _norm_base(recv_name_raw)      # e.g., "Rescue"
-        self.send_text = send_text                      # e.g., "propose!"
-        self.win_cmds = list(win_cmds)                  # e.g., ["patrol_stop", "set_coords", ...]
-        self.rival_recv_raw = rival_recv_raw            # e.g., "propose?"
-        self.rival_base = _norm_base(rival_recv_raw)    # e.g., "propose"
-
-class Scenario:
-    def __init__(self, commands_map: Dict[str, str]):
-        self.by_recv_base: Dict[str, Program] = {}   # key by recv_base
-        self.sendables: List[str] = []               # unique send_text (with '!')
-        self.commands_map: Dict[str, str] = commands_map or {}
-        self.programs_in_order: List[Program] = []   # preserve order
-        self.idle_cmds: List[str] = []               # explicit idle steps (no sendable)
-
-    @staticmethod
-    def _parse_front_commands(lines: List[str]) -> Tuple[Dict[str, str], int]:
-        if yaml is None:
-            # skip preface if PyYAML missing
-            idx = 0
-            while idx < len(lines) and not lines[idx].lstrip().startswith(">"):
-                idx += 1
-            return {}, idx
-
-        pre = []
-        idx = 0
-        while idx < len(lines) and not lines[idx].lstrip().startswith(">"):
-            pre.append(lines[idx]); idx += 1
-
-        text = "\n".join(pre).strip()
-        if not text:
-            return {}, idx
-
-        try:
-            data = yaml.safe_load(text)
-        except Exception:
-            return {}, idx
-
-        if not isinstance(data, dict) or "commands" not in data:
-            return {}, idx
-
-        cmds = data["commands"]
-        mapping: Dict[str, str] = {}
-        if isinstance(cmds, dict):
-            for k, v in cmds.items():
-                k2 = (k or "").strip(); v2 = (v or "").strip()
-                if k2 and v2: mapping[k2] = v2
-        elif isinstance(cmds, list):
-            for item in cmds:
-                if isinstance(item, dict) and "name" in item and "shell" in item:
-                    name = str(item["name"]).strip()
-                    shell = str(item["shell"]).strip()
-                    if name and shell: mapping[name] = shell
-        return mapping, idx
-
-    @staticmethod
-    def load_from_file(path: str) -> "Scenario":
-        lines = Path(path).read_text(encoding="utf-8").splitlines()
-
-        # commands preface
-        commands_map, start_idx = Scenario._parse_front_commands(lines)
-        sc = Scenario(commands_map)
-
-        # scan blocks
-        i = start_idx
-        while i < len(lines):
-            line = lines[i].rstrip(); i += 1
-            if not line.lstrip().startswith(">"):
-                continue
-
-            token = line.lstrip()[1:].strip()
-            if not token:
-                continue
-
-            base_token = _norm_base(token).lower()
-
-            # ---------- explicit idle block WITHOUT sendable ----------
-            if base_token in ("idle", "__idle__"):
-                idle_steps: List[str] = []
-                state = "scan"
-                while i < len(lines):
-                    l = lines[i].rstrip()
-                    if l.lstrip().startswith(">"):
-                        break
-                    i += 1
-                    s = l.strip()
-                    if not s:
-                        continue
-                    if state == "scan":
-                        if s.lower().startswith("commands to execute"):
-                            # collect until '+' or next block
-                            while i < len(lines):
-                                l2 = lines[i].rstrip()
-                                if l2.lstrip().startswith(">") or l2.strip().startswith("+"):
-                                    break
-                                i += 1
-                                cs = l2.strip()
-                                if cs:
-                                    idle_steps.append(cs)
-                            # skip optional '+' and one possible rival line (ignored for idle)
-                            if i < len(lines) and lines[i].strip().startswith("+"):
-                                i += 1
-                                if i < len(lines) and not lines[i].lstrip().startswith(">"):
-                                    i += 1
-                            break
-                        else:
-                            continue
-                sc.idle_cmds = idle_steps
-                continue
-            # ----------------------------------------------------------
-
-            # ---------- normal program (requires a sendable '!') ----------
-            recv_raw = token
-            send_text = ""
-            win_cmds: List[str] = []
-            rival_recv_raw = ""
-
-            state = "need_send"
-            while i < len(lines):
-                l = lines[i].rstrip()
-                if l.lstrip().startswith(">"):
-                    break
-                i += 1
-                s = l.strip()
-                if not s:
-                    continue
-
-                if state == "need_send":
-                    if s.endswith("!"):
-                        send_text = s
-                        state = "maybe_cmds"
-                    else:
-                        continue
-                    continue
-
-                if state == "maybe_cmds":
-                    if s.lower().startswith("commands to execute"):
-                        while i < len(lines):
-                            l2 = lines[i].rstrip()
-                            if l2.lstrip().startswith(">") or l2.strip().startswith("+"):
-                                break
-                            i += 1
-                            cs = l2.strip()
-                            if cs:
-                                win_cmds.append(cs)
-                        if i < len(lines) and lines[i].strip().startswith("+"):
-                            i += 1
-                            state = "after_plus"
-                        continue
-                    elif s.startswith("+"):
-                        state = "after_plus"
-                        continue
-                    else:
-                        continue
-
-                if state == "after_plus":
-                    rival_recv_raw = s
-                    break
-
-            send_text = send_text.strip()
-            if not send_text.endswith("!"):
-                continue  # malformed; skip
-
-            prog = Program(recv_raw, send_text, win_cmds, rival_recv_raw)
-            sc.by_recv_base[prog.recv_base] = prog
-            if send_text not in sc.sendables:
-                sc.sendables.append(send_text)
-            sc.programs_in_order.append(prog)
-
-        return sc
-
-    def idle_fallback(self) -> List[str]:
-        """If no explicit >idle, fallback to first program's steps (if any)."""
-        if self.idle_cmds:
-            return list(self.idle_cmds)
-        if self.programs_in_order:
-            return list(self.programs_in_order[0].win_cmds)
-        return []
-
-
-# ---------- Robot Node ----------
+# ---------------- Node ----------------
 class RobotNode(Node):
-    def __init__(self, robot: str):
+    def __init__(self, robot: str, commands_file: Optional[str]):
         super().__init__("projectn_robot_node")
         self.robot = robot
         self.agent: Optional[str] = None
 
-        # pubs/subs set on attach
+        # data pubs/subs (bound after attach)
         self.pub_in = None
         self.sub_out = None
         self.sub_ack = None
+
+        # scoped confirms (bound after attach)
         self.sub_attached = None
         self.sub_detached = None
 
-        # control
+        # control pubs
         self.pub_attach = self.create_publisher(RosString, "/robot_bridge/attach", 10)
         self.pub_detach = self.create_publisher(RosString, "/robot_bridge/detach", 10)
 
-        # history
-        self.sent_seq: List[str] = []
-        self.rec_seq: List[str] = []
+        # histories
+        self.sent_seq: list[str] = []   # list of sent strings (UP)
+        self.rec_seq: list[str] = []    # list of received lines (DOWN + ACK + confirms)
 
-        # pending + Robot Fifo
-        self._pending_ack = deque()
+        # ack tracking
+        self._pending_ack = deque()     # strings awaiting ack (FIFO)
         self._pending_lock = threading.Lock()
-        self._robot_fifo = deque()  # holds 'skip' tokens
 
-        # scenario
-        self._scenario_path: Optional[str] = None
-        self._scenario: Optional[Scenario] = None
-        self._send_to_program: Dict[str, Program] = {}
-        self._idle_cmds: List[str] = []  # explicit idle steps (or fallback)
-        self._idle_armed: bool = False   # run idle after attach confirm if True
-
-        # sync
+        # execution lock to avoid interleaved prints
         self._print_lock = threading.Lock()
+
+        # randomness (for 'start' random mode)
+        self._rng = random.Random(secrets.randbits(64))
+
+        # YAML commands map (optional but preferred)
+        env_path = os.environ.get("START_COMMANDS_FILE", "").strip() or None
+        self._commands_file = commands_file or env_path
+        self._cmd_map: Dict[str, str] = {}
+        self._builtins: List[str] = []
+
+        self._try_load_yaml_commands(initial=True)
+
+        # 'start' behavior: random | fixed
+        mode_env = (os.environ.get("START_MODE", "").strip().lower() or "random")
+        self._start_mode = "fixed" if mode_env == "fixed" else "random"
+        self._start_fixed_cmd = os.environ.get("START_FIXED_CMD", "").strip()
+
+        # attach confirm event (used by auto-attach retry loop)
         self._attach_ok_event = threading.Event()
 
-    # ----- scenario API -----
-    def scenario_load(self, path: str):
+    # ---------- Properties (getters / setters) ----------
+    @property
+    def start_mode(self) -> str:
+        """'random' or 'fixed'."""
+        return self._start_mode
+
+    @start_mode.setter
+    def start_mode(self, mode: str) -> None:
+        m = (mode or "").strip().lower()
+        if m not in ("random", "fixed"):
+            raise ValueError("start_mode must be 'random' or 'fixed'")
+        self._start_mode = m
+        print(f"[onstart] mode set to {m}")
+
+    @property
+    def start_fixed_name(self) -> str:
+        """The command NAME to send when start_mode == 'fixed'."""
+        return self._start_fixed_cmd
+
+    @start_fixed_name.setter
+    def start_fixed_name(self, name: str) -> None:
+        n = (name or "").strip()
+        if not n:
+            raise ValueError("start_fixed_name cannot be empty")
+        self._start_fixed_cmd = n
+        print(f"[onstart] fixed name set to '{n}'")
+
+    @property
+    def commands_file(self) -> Optional[str]:
+        """Path to YAML commands file (setting it does NOT auto-load)."""
+        return self._commands_file
+
+    @commands_file.setter
+    def commands_file(self, path: str) -> None:
         p = str(Path(path).expanduser())
-        sc = Scenario.load_from_file(p)
-        self._scenario_path = p
-        self._scenario = sc
-        self._send_to_program.clear()
-        for prog in sc.by_recv_base.values():
-            self._send_to_program[prog.send_text] = prog
+        self._commands_file = p
+        print(f"[commands] file path set -> {p} (use 'commands load' or node.load_commands() to load)")
 
-        # choose idle: explicit >idle if present, otherwise fallback to first program steps
-        self._idle_cmds = sc.idle_fallback()
+    @property
+    def commands_map(self) -> Dict[str, str]:
+        """Read-only snapshot of name→shell mapping."""
+        return dict(self._cmd_map)
 
-        print(f"[scenario] loaded: {p}  programs={len(sc.by_recv_base)}  sendables={len(sc.sendables)}  commands={len(sc.commands_map)}")
-        if self._idle_cmds:
-            print(f"[idle] steps: {len(self._idle_cmds)}")
-            # Only run idle immediately if we are already attached & confirmed.
-            if self.agent and self._attach_ok_event.is_set():
-                self._idle_armed = False
-                self._enter_idle()
-            else:
-                self._idle_armed = True
-                print("[idle] armed (will run after attach confirm)")
-        else:
-            print("[idle] no idle steps found")
-            self._idle_armed = False
+    @property
+    def command_names(self) -> List[str]:
+        """List of loaded command names (used for random mode)."""
+        return list(self._builtins)
 
-    def scenario_reload(self):
-        if not self._scenario_path:
-            print("[scenario] no file loaded"); return
-        self.scenario_load(self._scenario_path)
+    # ---------- Overloaded helpers ----------
+    @overload
+    def send_text(self, text: str) -> None: ...
+    @overload
+    def send_text(self, text: Sequence[str]) -> None: ...
 
-    def scenario_show(self):
-        if not self._scenario:
-            print("[scenario] not loaded"); return
-        print("=== Scenario Programs (in order) ===")
-        for i, prog in enumerate(self._scenario.programs_in_order, 1):
-            base = prog.recv_base
-            print(f"{i}. Trigger: {prog.recv_name_raw}  (base='{base}')  send: {prog.send_text}  rival: {prog.rival_recv_raw}")
-            if prog.win_cmds:
-                print("   commands to execute:")
-                for j, c in enumerate(prog.win_cmds, 1):
-                    print(f"     {j}. {c}")
-        print("\n=== Embedded Commands Map ===")
-        if not self._scenario.commands_map:
-            print("  (none)")
-        else:
-            for i, (k, v) in enumerate(self._scenario.commands_map.items(), 1):
-                print(f"  {i}. {k} → {v}")
-        print("\n=== Idle Steps ===")
-        if not self._idle_cmds:
-            print("  (none)")
-        else:
-            for i, c in enumerate(self._idle_cmds, 1):
-                print(f"  {i}. {c}")
-
-    # ----- helper: (re)enter idle -----
-    def _enter_idle(self):
-        """Run idle steps now."""
-        if not self._idle_cmds:
-            return
-        print("[idle] entering...")
-        for step in self._idle_cmds:
-            self._execute_one(step)
-
-    # ----- attach/detach -----
-    def _cleanup_agent_bindings(self):
-        for sub in (self.sub_out, self.sub_ack, self.sub_attached, self.sub_detached):
-            if sub:
-                try: self.destroy_subscription(sub)
-                except Exception: pass
-        self.sub_out = self.sub_ack = self.sub_attached = self.sub_detached = None
-        if self.pub_in:
-            try: self.destroy_publisher(self.pub_in)
-            except Exception: pass
-        self.pub_in = None
-        self._attach_ok_event.clear()
-        # clear env hints
-        os.environ.pop("AGENT", None)
-        os.environ.pop("ROBOT", None)
-
-    def attach(self, agent: str):
-        agent = (agent or "").strip()
-        if not agent:
-            print("usage: attach <AGENT>"); return
-        if self.agent == agent and self.pub_in:
-            print(f"[attach] already attached to {agent}"); return
-
-        self._cleanup_agent_bindings()
-        self.agent = agent
-
-        # export into environment so scenario shell commands can use $AGENT / $ROBOT
-        os.environ["AGENT"] = agent
-        os.environ["ROBOT"] = self.robot
-
-        self.pub_in = self.create_publisher(RosString, f"/robot_bridge/in/{agent}/{self.robot}", 10)
-        self.sub_out = self.create_subscription(RosString, f"/robot_bridge/out/{agent}/{self.robot}", self._on_down_string, 50)
-        self.sub_ack = self.create_subscription(RosString, f"/robot_bridge/ack/{agent}/{self.robot}", self._on_ack_string, 50)
-        self.sub_attached = self.create_subscription(RosString, f"/robot_bridge/attached/{agent}/{self.robot}", self._on_scoped_attached, 10)
-        self.sub_detached = self.create_subscription(RosString, f"/robot_bridge/detached/{agent}/{self.robot}", self._on_scoped_detached, 10)
-
-        payload = f'{{"agent":"{agent}","robot":"{self.robot}"}}'
-        self.pub_attach.publish(RosString(data=payload))
-        print(f"[attach] requested -> agent={agent}")
-
-    def detach(self):
-        if not self.agent:
-            print("Not attached."); return
-        with self._pending_lock:
-            self._pending_ack.clear()
-        self._robot_fifo.clear()
-        payload = f'{{"agent":"{self.agent}","robot":"{self.robot}"}}'
-        self.pub_detach.publish(RosString(data=payload))
-        print(f"[detach] requested -> agent={self.agent}")
-        # env will be cleared in _cleanup_agent_bindings once detach confirm arrives
-
-    def _on_scoped_attached(self, msg: RosString):
-        s = (msg.data or "").strip()
-        if s:
-            self.rec_seq.append(s)
-            print(f"[hub-confirm] {s}")
-            self._attach_ok_event.set()
-        # If idle was armed (scenario loaded before attach), run it now.
-        if self._idle_cmds and self._idle_armed:
-            self._idle_armed = False
-            self._enter_idle()
-
-    def _on_scoped_detached(self, msg: RosString):
-        s = (msg.data or "").strip()
-        if s:
-            self.rec_seq.append(s)
-            print(f"[hub-detach] {s}")
-        self._cleanup_agent_bindings()
-        self.agent = None
-
-    # ----- send -----
-    def send_text(self, text: str):
+    def send_text(self, text):  # runtime impl, preserves existing behavior
         if not self.agent or not self.pub_in:
-            print("[ROBOT] Attach first: attach <AGENT>"); return
-        s = (text or "").strip()
+            print("Attach first: attach <AGENT>")
+            return
+
+        if isinstance(text, (list, tuple)):
+            for item in text:
+                s = (str(item) or "").strip()
+                if not s:  # skip empties
+                    continue
+                self.pub_in.publish(RosString(data=s))
+                self.sent_seq.append(s)
+                with self._pending_lock:
+                    self._pending_ack.append(s)
+                print(f"[send] {s}")
+            return
+
+        s = (str(text) or "").strip()
         if not s:
             return
         self.pub_in.publish(RosString(data=s))
@@ -460,7 +251,191 @@ class RobotNode(Node):
             self._pending_ack.append(s)
         print(f"[send] {s}")
 
-    # ----- DOWN handler -----
+    @overload
+    def load_commands(self) -> None: ...
+    @overload
+    def load_commands(self, path: str) -> None: ...
+
+    def load_commands(self, path: Optional[str] = None) -> None:
+        """load_commands() -> reload last; load_commands(path) -> set path then load."""
+        if path is None:
+            try:
+                self.load_commands_map_from_yaml(None)
+            except Exception as e:
+                print(f"[commands] reload error: {e}")
+                print("[note] Staying in UNMAPPED mode; you can still run unmapped text as raw shells.")
+        else:
+            self.commands_file = path
+            try:
+                self.load_commands_map_from_yaml(self._commands_file)
+            except Exception as e:
+                print(f"[commands] load error: {e}")
+                print("[note] Staying in UNMAPPED mode; you can still run unmapped text as raw shells.")
+
+    # ---------- YAML commands map ----------
+    def _try_load_yaml_commands(self, initial: bool = False):
+        """Attempt to load YAML. On failure, stay in unmapped mode and inform the user."""
+        if yaml is None:
+            print("[warn] PyYAML not available (pip install pyyaml). Running in UNMAPPED mode.")
+            print("[note] You can still execute unmapped text as raw shell commands.")
+            if initial and self._commands_file:
+                print(f"[hint] To load later: commands load {self._commands_file}")
+            return
+
+        path = self._commands_file
+        if not path:
+            if initial:
+                print("[warn] No YAML path provided. Running in UNMAPPED mode.")
+                print("[note] You can still execute unmapped text as raw shell commands.")
+                print("[hint] Provide one via --commands PATH or START_COMMANDS_FILE, then use 'commands load <PATH>'.")
+            return
+
+        try:
+            self.load_commands_map_from_yaml(path)
+        except Exception as e:
+            print(f"[warn] Failed to load YAML commands from '{path}': {e}")
+            print("[note] Continuing in UNMAPPED mode — you can still execute unmapped text as raw shell commands.")
+            print("[hint] Fix the YAML file and run: commands reload")
+
+    def _parse_yaml_commands(self, path: str) -> Dict[str, str]:
+        p = Path(path).expanduser()
+        if not p.exists() or not p.is_file():
+            raise FileNotFoundError(f"commands YAML not found: {p}")
+        raw = p.read_text(encoding="utf-8")
+        data = yaml.safe_load(raw)
+
+        mapping: Dict[str, str] = {}
+
+        def merge_map(obj):
+            for k, v in obj.items():
+                name = (k or "").strip()
+                shell = (v or "").strip()
+                if not name or not shell:
+                    raise ValueError(f"invalid mapping entry: {k!r} -> {v!r}")
+                mapping[name] = shell
+
+        if isinstance(data, dict):
+            if "commands" in data:
+                cmds = data["commands"]
+                if isinstance(cmds, dict):
+                    merge_map(cmds)
+                elif isinstance(cmds, list):
+                    for idx, item in enumerate(cmds, 1):
+                        if not isinstance(item, dict) or "name" not in item or "shell" not in item:
+                            raise ValueError(f"commands[{idx}] must have 'name' and 'shell'")
+                        name = str(item["name"]).strip()
+                        shell = str(item["shell"]).strip()
+                        if not name or not shell:
+                            raise ValueError(f"commands[{idx}] has empty name/shell")
+                        mapping[name] = shell
+                else:
+                    raise ValueError("'commands' must be a mapping or a list")
+            else:
+                merge_map(data)
+        elif isinstance(data, list):
+            for idx, item in enumerate(data, 1):
+                if not isinstance(item, dict) or "name" not in item or "shell" not in item:
+                    raise ValueError(f"[{idx}] must be an object with 'name' and 'shell'")
+                name = str(item["name"]).strip()
+                shell = str(item["shell"]).strip()
+                if not name or not shell:
+                    raise ValueError(f"[{idx}] empty name/shell")
+                mapping[name] = shell
+        else:
+            raise ValueError("YAML must be a mapping, or a list, or a mapping with 'commands'")
+
+        if not mapping:
+            raise ValueError("no commands loaded from YAML")
+        return mapping
+
+    def load_commands_map_from_yaml(self, path: str | None) -> None:
+        if path is not None:
+            self._commands_file = str(Path(path).expanduser())
+        if not getattr(self, "_commands_file", None):
+            raise ValueError("no commands file path set")
+        self._cmd_map = self._parse_yaml_commands(self._commands_file)
+        self._builtins = list(self._cmd_map.keys())
+        print(f"[commands] loaded {len(self._builtins)} YAML commands from {self._commands_file}")
+
+    # ---------- Attach / Detach ----------
+    def _cleanup_agent_bindings(self):
+        for sub in (self.sub_out, self.sub_ack, self.sub_attached, self.sub_detached):
+            if sub:
+                try:
+                    self.destroy_subscription(sub)
+                except Exception:
+                    pass
+        self.sub_out = self.sub_ack = self.sub_attached = self.sub_detached = None
+        if self.pub_in:
+            try:
+                self.destroy_publisher(self.pub_in)
+            except Exception:
+                pass
+        self.pub_in = None
+        self._attach_ok_event.clear()
+
+    def attach(self, agent: str):
+        agent = agent.strip()
+        if not agent:
+            print("usage: attach <AGENT>")
+            return
+        if self.agent == agent and self.pub_in:
+            print(f"[attach] already attached to {agent}")
+            return
+
+        self._cleanup_agent_bindings()
+        self.agent = agent
+
+        # data channels (SCOPED)
+        self.pub_in = self.create_publisher(RosString, f"/robot_bridge/in/{agent}/{self.robot}", 10)
+
+        self.sub_out = self.create_subscription(
+            RosString, f"/robot_bridge/out/{agent}/{self.robot}", self._on_down_string, 50
+        )
+        self.sub_ack = self.create_subscription(
+            RosString, f"/robot_bridge/ack/{agent}/{self.robot}", self._on_ack_string, 50
+        )
+
+        # scoped confirms
+        self.sub_attached = self.create_subscription(
+            RosString, f"/robot_bridge/attached/{agent}/{self.robot}", self._on_scoped_attached, 10
+        )
+        self.sub_detached = self.create_subscription(
+            RosString, f"/robot_bridge/detached/{agent}/{self.robot}", self._on_scoped_detached, 10
+        )
+
+        # announce intent to hub (JSON control; data remains plain strings)
+        payload = f'{{"agent":"{agent}","robot":"{self.robot}"}}'
+        self.pub_attach.publish(RosString(data=payload))
+        print(f"[attach] requested -> agent={agent}")
+
+    def detach(self):
+        if not self.agent:
+            print("Not attached.")
+            return
+        with self._pending_lock:
+            self._pending_ack.clear()
+        payload = f'{{"agent":"{self.agent}","robot":"{self.robot}"}}'
+        self.pub_detach.publish(RosString(data=payload))
+        print(f"[detach] requested -> agent={self.agent}")
+
+    # ---------- Scoped confirm handlers ----------
+    def _on_scoped_attached(self, msg: RosString):
+        text = (msg.data or "").strip()
+        if text:
+            self.rec_seq.append(text)
+            print(f"[hub-confirm] {text}")
+            self._attach_ok_event.set()
+
+    def _on_scoped_detached(self, msg: RosString):
+        text = (msg.data or "").strip()
+        if text:
+            self.rec_seq.append(text)
+            print(f"[hub-detach] {text}")
+        self._cleanup_agent_bindings()
+        self.agent = None
+
+    # ---------- Receive: DOWN ----------
     def _on_down_string(self, ros_msg: RosString):
         text = (ros_msg.data or "").strip()
         if not text:
@@ -468,168 +443,90 @@ class RobotNode(Node):
         self.rec_seq.append(text)
         print(f"[down] {text}")
 
-        # global skip is dropped
-        if text == "skip":
-            print("[ROBOT] received 'skip' -> dropped")
-            return
+        if _norm(text) == "start":
+            if self._start_mode == "fixed":
+                choice = self._start_fixed_cmd.strip()
+                if not choice:
+                    print("[auto] start → fixed command empty; ignoring")
+                    return
+                print(f"[auto] start (fixed) → send '{choice}'")
+                self.send_text(choice)
+                return
+            else:
+                if not self._builtins:
+                    print("[auto] start → no YAML commands loaded; random mode is idle.")
+                    print("[hint] Use 'commands load <PATH>' or switch to 'onstart fixed <NAME>'")
+                    return
+                choice = self._rng.choice(self._builtins)
+                print(f"[auto] start (random) → send '{choice}'")
+                self.send_text(choice)
+                return
 
-        # auto-capture coords like "[x, y]" into ENV COORDS for later steps
-        m = _COORD_RE.search(text)
-        if m:
-            x, y = m.group(1), m.group(2)
-            os.environ["COORDS"] = f"[{x}, {y}]"
-            print(f"[coords] cached COORDS={os.environ['COORDS']}")
+        threading.Thread(target=self._execute, args=(text,), daemon=True).start()
 
-        if not self._scenario:
-            return
-
-        incoming_base = _norm_base(text)
-
-        # Rival detection first: if this DOWN is the rival marker and our own send is pending -> enqueue 'skip'
-        for prog in self._scenario.by_recv_base.values():
-            if incoming_base == prog.rival_base and prog.rival_base:
-                with self._pending_lock:
-                    pending = list(self._pending_ack)
-                if prog.send_text in pending:
-                    self._robot_fifo.append("skip")
-                    print(f"[FIFO] rival '{prog.rival_recv_raw}' while '{prog.send_text}' pending -> Robot Fifo += 'skip'")
-
-        # Trigger: match by base (Summon/Summon?/Summon!)
-        prog = self._scenario.by_recv_base.get(incoming_base)
-        if prog:
-            # Send its UP (e.g., propose!)
-            self.send_text(prog.send_text)
-            # Remember mapping for execution on pre-ack
-            self._send_to_program[prog.send_text] = prog
-            return
-
-    # ----- PRE-ACK handler -----
+    # ---------- Receive: ACK ----------
     def _on_ack_string(self, ros_msg: RosString):
         raw = (ros_msg.data or "").strip()
         if not raw:
             return
         self.rec_seq.append(raw)
+        print(f"[ack] {raw}")
 
-        # We only care about pre-ack
-        if not raw.lower().startswith("ack:ready:"):
+        low = raw.lower()
+        if not low.startswith("ack:"):
+            return
+        original = raw[4:].strip()
+        if not original:
             return
 
-        # Minimal operator log (hide ids/text)
-        print("[agent ack] your message is ready")
-
-        # Parse to get id + original to decide
-        try:
-            _, rest = raw.split("ack:ready:", 1)
-            sid, original = rest.split(":", 1)
-            did = int(sid)
-            original = original.strip()
-        except Exception:
-            return
-
-        # Decision via Robot Fifo
-        decision = "send"
-        if self._robot_fifo:
-            try: self._robot_fifo.popleft()
-            except Exception: pass
-            decision = "skip"
-
-        if self.pub_in:
-            self.pub_in.publish(RosString(data=f"__dec__:{decision}:{did}"))
-            print(f"[robot ack] {decision}")
-
-        # Remove original from pending (if present)
-        removed = False
+        found = False
         with self._pending_lock:
             try:
                 for _ in range(len(self._pending_ack)):
                     s = self._pending_ack[0].strip()
                     if s == original:
                         self._pending_ack.popleft()
-                        removed = True
+                        found = True
                         break
                     else:
                         self._pending_ack.rotate(-1)
             except Exception:
                 pass
 
-        if decision == "skip":
-            # Lost → remain in idle (no action)
-            return
-
-        if not removed:
-            # Nothing to execute
-            return
-
-        # Win path → execute program's commands, then return to idle
-        prog = self._send_to_program.get(original)
-
-        if prog and prog.win_cmds:
-            for step in prog.win_cmds:
-                self._execute_one(step)
+        if found:
+            threading.Thread(target=self._execute, args=(original,), daemon=True).start()
         else:
-            # Fallback: if no defined steps, try to run the original literally
-            self._execute_one(original)
+            print("[ack] ignored (not pending here)")
 
-        # Return to idle (run idle steps again)
-        self._enter_idle()
-
-    # ----- execution -----
-    def _resolve_command(self, spec: str) -> str:
-        spec = (spec or "").strip()
+    # ---------- Execute (resolve via YAML map or run raw) ----------
+    def _execute(self, text: str):
+        """
+        Resolve 'text' via YAML map (name → shell template) if present.
+        Placeholders:
+          {robot} → robot name        e.g., R1
+          {base}  → /{robot}/cmd_vel e.g., /R1/cmd_vel
+        If 'text' not in the map, run it as a raw shell command.
+        """
+        name = (text or "").strip()
         base = f"/{self.robot}/cmd_vel"
 
-        # raw shell form
-        if spec.startswith("sh:"):
-            return spec[3:].strip()
-
-        # lookup in embedded commands map
-        if self._scenario and spec in self._scenario.commands_map:
-            template = self._scenario.commands_map[spec]
+        if name in self._cmd_map:
+            template = self._cmd_map[name]
             try:
-                return template.format(robot=self.robot, base=base)
+                cmd_to_run = template.format(robot=self.robot, base=base)
             except KeyError as e:
-                raise RuntimeError(f"missing placeholder {e} in '{spec}'")
-
-        # else, run literally
-        return spec
-
-    def _execute_one(self, spec: str):
-        # --- 1) High-level pseudo-commands (no shell) -----------------------
-        spec = (spec or "").strip()
-
-        # send_up_file:/path/to/file  → read file & send via RobotNode.send_text()
-        if spec.startswith("send_up_file:"):
-            path = spec[len("send_up_file:"):].strip()
-            if not path:
                 with self._print_lock:
-                    print("[exec] send_up_file: missing path")
+                    print(f"[exec-map] formatting error for '{name}': missing placeholder {e}")
                 return
-            try:
-                txt = Path(path).read_text(encoding="utf-8").strip()
-            except Exception as e:
-                with self._print_lock:
-                    print(f"[exec] send_up_file: failed to read '{path}': {e}")
-                return
-            if not txt:
-                with self._print_lock:
-                    print(f"[exec] send_up_file: '{path}' is empty, nothing to send")
-                return
-            # Use normal send logic so it goes through /robot_bridge/in/<agent>/<robot>,
-            # shows up in list sent, and participates in the ack pipeline.
-            self.send_text(txt)
-            return
-
-        # --- 2) Normal path: resolve via commands map and run as shell -------
-        try:
-            cmd = self._resolve_command(spec)
-        except Exception as e:
             with self._print_lock:
-                print(f"[exec-map] error: {e}")
-            return
+                print(f"[exec-map] {name} → {cmd_to_run}")
+        else:
+            cmd_to_run = name
+            with self._print_lock:
+                print(f"[exec-any] {cmd_to_run}")
 
-        with self._print_lock:
-            print(f"[exec] {spec} → {cmd}")
-        rc, out, err = exec_shell_any(cmd)
+        rc, out, err = exec_shell_any(cmd_to_run)
+
         with self._print_lock:
             if out.strip():
                 print(out.rstrip())
@@ -638,30 +535,29 @@ class RobotNode(Node):
                     print(f"[stderr] {line}")
             print(f"[exit] {rc}")
 
-
-
-    # ----- REPL -----
+    # ---------- REPL ----------
     def _help(self):
         print("""
 Robot REPL
-  attach <AGENT>           attach to an agent
-  detach                   request detach from current agent
-  send                     show numbered sendables from loaded scenario; choose to send one
-  scenario load <PATH>     load a scenario file (contains BOTH programs + commands + optional >idle)
-  scenario reload          reload last scenario file
-  scenario show            print parsed programs, embedded commands map, and idle steps
-  list sent                list sent strings (order)
-  list rec                 list received lines (down + pre-ack + confirms)
-  setenv KEY=VALUE         set env for future execs (e.g., ROS_SETUP=/opt/ros/humble/setup.bash)
-  timeout <seconds>        change EXEC_TIMEOUT at runtime
-  help
-  quit
-""".strip())
+  attach <AGENT>          attach to an agent
+  send <TEXT...>          send a plain string to the agent (UP)
+  list sent               list sent strings (order)
+  list rec                list received lines (down + ack + confirms)
 
-    def _maybe_reprint(self, last_line: str):
-        if last_line.strip() == "":
-            print()
-            self._help()
+  commands show           show YAML file path and commands (name → shell)
+  commands load <PATH>    load YAML commands from file
+  commands reload         reload the last loaded YAML commands file
+
+  onstart random          set 'start' behavior to random choice from YAML names
+  onstart fixed <NAME>    set 'start' behavior to always send <NAME>
+  onstart show            show current 'start' mode and fixed name (if any)
+
+  setenv KEY=VALUE        set env for future execs (e.g., ROS_SETUP=/opt/ros/humble/setup.bash)
+  showenv                 print key env vars (ROS_SETUP, ROS_DOMAIN_ID, PATH, RMW_IMPL)
+  detach                  request detach from current agent
+  help                    show this help
+  quit                    exit
+""".strip())
 
     def run_repl(self):
         time.sleep(0.2)
@@ -670,119 +566,119 @@ Robot REPL
             try:
                 sys.stdout.write("robot> "); sys.stdout.flush()
                 line = sys.stdin.readline()
-                if line is None:
+                if not line:
                     time.sleep(0.1); continue
                 parts = line.strip().split()
-                if not parts:
-                    self._maybe_reprint(line); continue
+                if not parts: continue
 
                 cmd, *args = parts
                 if cmd == "quit":
-                    self._graceful_shutdown(); break
-
+                    self._graceful_shutdown()
+                    break
                 elif cmd == "help":
                     self._help()
-                    self._maybe_reprint("")
-                    continue
-
                 elif cmd == "attach":
-                    if not args: print("usage: attach <AGENT>")
-                    else: self.attach(args[0])
-                    continue
-
-                elif cmd == "detach":
-                    self.detach(); continue
-
-                elif cmd == "send":
-                    if not self._scenario:
-                        print("[send] scenario file is not loaded yet"); continue
-                    if not self._scenario.sendables:
-                        print("[send] no sendables found in scenario"); continue
-                    print("Choose what to send:")
-                    for i, s in enumerate(self._scenario.sendables, 1):
-                        print(f"  {i}) {s}")
-                    sel = input("> ").strip()
-                    try:
-                        k = int(sel)
-                        if not (1 <= k <= len(self._scenario.sendables)):
-                            raise ValueError
-                        send_text = self._scenario.sendables[k-1]
-                        self.send_text(send_text)
-                        if send_text not in self._send_to_program:
-                            for p in self._scenario.by_recv_base.values():
-                                if p.send_text == send_text:
-                                    self._send_to_program[send_text] = p
-                                    break
-                    except Exception:
-                        print("Invalid selection.")
-                    continue
-
-                elif cmd == "scenario":
                     if not args:
-                        print("usage: scenario [load <PATH>|reload|show]"); continue
-                    sub = args[0].lower()
-                    if sub == "load":
-                        if len(args) < 2:
-                            print("usage: scenario load <PATH>")
-                        else:
-                            path = " ".join(args[1:])
-                            try:
-                                self.scenario_load(path)
-                            except Exception as e:
-                                print(f"[scenario] load error: {e}")
-                    elif sub == "reload":
-                        self.scenario_reload()
-                    elif sub == "show":
-                        self.scenario_show()
-                    else:
-                        print("usage: scenario [load <PATH>|reload|show]")
-                    continue
-
+                        print("usage: attach <AGENT>"); continue
+                    self.attach(args[0])
+                elif cmd == "detach":
+                    self.detach()
+                elif cmd == "send":
+                    if not args:
+                        print("usage: send <TEXT...>"); continue
+                    text = " ".join(args)
+                    self.send_text(text)
                 elif cmd == "list":
                     if not args:
                         print("usage: list [sent|rec]"); continue
-                    sub = args[0].lower()
-                    if sub == "sent":
+                    which = args[0].lower()
+                    if which == "sent":
                         print("--- sent ---")
                         for i, s in enumerate(self.sent_seq, 1):
                             print(f"  {i}. {s}")
-                    elif sub == "rec":
+                    elif which == "rec":
                         print("--- received ---")
                         for i, s in enumerate(self.rec_seq, 1):
                             print(f"  {i}. {s}")
                     else:
                         print("usage: list [sent|rec]")
-                    continue
-
                 elif cmd == "setenv":
                     if not args or "=" not in args[0]:
-                        print('usage: setenv KEY=VALUE'); continue
+                        print('usage: setenv KEY=VALUE   (example: setenv ROS_SETUP=/opt/ros/humble/setup.bash)')
+                        continue
                     k, v = args[0].split("=", 1)
                     os.environ[k] = v
                     print(f"[env] {k}={v}")
-                    continue
-
-                elif cmd == "timeout":
+                elif cmd == "showenv":
+                    print(f"ROS_SETUP={os.environ.get('ROS_SETUP','')}")
+                    print(f"ROS_DOMAIN_ID={os.environ.get('ROS_DOMAIN_ID','')}")
+                    print(f"RMW_IMPL={os.environ.get('RMW_IMPLEMENTATION','')}")
+                    print(f"PATH={os.environ.get('PATH','')}")
+                elif cmd == "commands":
                     if not args:
-                        print(f"[timeout] current EXEC_TIMEOUT={os.environ.get('EXEC_TIMEOUT','60')}"); continue
-                    try:
-                        sec = float(args[0]);  assert sec > 0
-                        os.environ["EXEC_TIMEOUT"] = str(int(sec))
-                        print(f"[timeout] EXEC_TIMEOUT set to {int(sec)}")
-                    except Exception:
-                        print("usage: timeout <seconds>, seconds > 0")
-                    continue
-
+                        print("usage: commands [show|load <PATH>|reload]")
+                        continue
+                    sub = args[0].lower()
+                    if sub == "show":
+                        print(f"[commands] file={getattr(self, '_commands_file', '') or '(none)'}")
+                        if not self._cmd_map:
+                            print("(no commands loaded) — running in UNMAPPED mode.")
+                            print("You can still execute unmapped text as raw shells.")
+                        else:
+                            print("--- commands (name → shell) ---")
+                            for i, k in enumerate(self._builtins, 1):
+                                print(f"  {i}. {k}  →  {self._cmd_map[k]}")
+                    elif sub == "load":
+                        if len(args) < 2:
+                            print("usage: commands load <PATH>")
+                            continue
+                        path = " ".join(args[1:]).strip()
+                        try:
+                            self.load_commands(path)
+                        except Exception as e:
+                            print(f"[commands] load error: {e}")
+                            print("[note] Staying in UNMAPPED mode; you can still run unmapped text as raw shells.")
+                    elif sub == "reload":
+                        try:
+                            self.load_commands()
+                        except Exception as e:
+                            print(f"[commands] reload error: {e}")
+                            print("[note] Staying in UNMAPPED mode; you can still run unmapped text as raw shells.")
+                    else:
+                        print("usage: commands [show|load <PATH>|reload]")
+                elif cmd == "onstart":
+                    if not args:
+                        print("usage: onstart [show|random|fixed <NAME...>]")
+                        continue
+                    sub = args[0].lower()
+                    if sub == "show":
+                        mode = self._start_mode
+                        print(f"[onstart] mode={mode}" +
+                              (f" fixed_name='{self._start_fixed_cmd}'" if mode == "fixed" else ""))
+                    elif sub == "random":
+                        self.start_mode = "random"
+                        if not self._builtins:
+                            print("[note] No YAML names loaded; random 'start' will do nothing until you load a file.")
+                    elif sub == "fixed":
+                        if len(args) < 2:
+                            print("usage: onstart fixed <NAME...>")
+                            continue
+                        name = " ".join(args[1:]).strip()
+                        try:
+                            self.start_fixed_name = name
+                        except ValueError as e:
+                            print(f"[onstart] {e}")
+                            continue
+                        self.start_mode = "fixed"
+                    else:
+                        print("usage: onstart [show|random|fixed <NAME...>]")
                 else:
                     self._help()
-                    self._maybe_reprint("")
-                    continue
-
             except Exception as e:
                 print(f"[REPL error] {e}")
                 time.sleep(0.1)
 
-    # ----- startup / shutdown -----
+    # ---------- Startup interactive flow (Agent spawn + auto-attach) ----------
     def startup_interactive(self):
         print(f"🤖 RobotNode '{self.robot}' ready.")
         yn = input("Do you want to create an agent for this robot? [Y/n]: ").strip().lower()
@@ -791,75 +687,49 @@ Robot REPL
             name = input(f"Enter agent name (default = {default_agent}): ").strip()
             agent_name = name if name else default_agent
 
-            # Try to spawn in a new terminal (optional)
-            term = None
-            for name, argv in [
-                ("gnome-terminal", ["gnome-terminal", "--", "bash", "-lc"]),
-                ("x-terminal-emulator", ["x-terminal-emulator", "-e", "bash", "-lc"]),
-                ("konsole", ["konsole", "-e", "bash", "-lc"]),
-                ("xfce4-terminal", ["xfce4-terminal", "--command", "bash -lc"]),
-                ("tilix", ["tilix", "-e", "bash", "-lc"]),
-                ("kitty", ["kitty", "bash", "-lc"]),
-                ("alacritty", ["alacritty", "-e", "bash", "-lc"]),
-                ("lxterminal", ["lxterminal", "-e", "bash", "-lc"]),
-                ("xterm", ["xterm", "-e", "bash", "-lc"]),
-            ]:
-                if shutil.which(name):
-                    term = argv; break
-            if term:
-                launch = _compose_shell(f'ros2 run projectn agent_hub_robot --agent "{agent_name}"; exec bash')
-                try:
-                    subprocess.Popen(term + [launch], env=os.environ)
-                    print(f"[spawn] agent '{agent_name}' launched in a new terminal.")
-                except Exception as e:
-                    print(f"[spawn] failed to spawn terminal: {e}")
-            else:
-                print("[spawn] no terminal emulator found. Start agent manually if needed.")
+            _spawn_agent_terminal(agent_name)
 
             self.attach(agent_name)
-            t0 = time.time()
+            t_start = time.time()
+            total_timeout = 20.0
+            resend_every = 0.5
             payload = f'{{"agent":"{agent_name}","robot":"{self.robot}"}}'
-            while not self._attach_ok_event.is_set() and (time.time() - t0 < 20.0):
-                if self.pub_attach:
-                    self.pub_attach.publish(RosString(data=payload))
-                time.sleep(0.5)
+            while not self._attach_ok_event.is_set() and (time.time() - t_start < total_timeout):
+                self.pub_attach.publish(RosString(data=payload))
+                time.sleep(resend_every)
 
             if self._attach_ok_event.is_set():
                 print(f"[attach] confirmed with agent '{agent_name}'.")
             else:
-                print("[attach] no confirmation yet; topics bound, continue.")
+                print("[attach] no confirmation yet (agent might still be starting). You can continue; topics are bound.")
         else:
-            print("Skipping agent creation. Use 'attach <AGENT>' later.")
+            print("Skipping agent creation. Use 'attach <AGENT>' later to bind to an existing agent.")
 
+    # ---------- Shutdown ----------
     def _graceful_shutdown(self):
         try:
             if self.agent:
                 self.detach()
         finally:
-            try: rclpy.shutdown()
-            except Exception: pass
+            try:
+                rclpy.shutdown()
+            except Exception:
+                pass
 
 
 def main():
-    ap = argparse.ArgumentParser(description="ProjectN Robot Node (punctuation-agnostic + coords-capture + explicit idle)")
+    ap = argparse.ArgumentParser(description="ProjectN Robot Node (YAML-optional; scoped I/O; ack-gated exec; start switch; agent auto-spawn)")
     ap.add_argument("--robot", required=True, help="Robot name")
-    ap.add_argument("--scenario", help="Path to scenario file (contains BOTH programs + commands + optional >idle)")
+    ap.add_argument("--commands", help="Path to YAML commands file (overrides START_COMMANDS_FILE)")
     args = ap.parse_args()
 
     rclpy.init()
-    node = RobotNode(args.robot)
-
-    # NOTE: scenario is loaded BEFORE interactive attach; idle is armed and will run after attach confirm
-    if args.scenario:
-        try:
-            node.scenario_load(args.scenario)
-        except Exception as e:
-            print(f"[scenario] load error: {e}")
-
+    node = RobotNode(args.robot, commands_file=args.commands)
     node.startup_interactive()
 
     exe = MultiThreadedExecutor()
     exe.add_node(node)
+
     repl_thread = threading.Thread(target=node.run_repl, daemon=True)
     repl_thread.start()
 
@@ -868,11 +738,15 @@ def main():
     except KeyboardInterrupt:
         node._graceful_shutdown()
     finally:
-        try: exe.shutdown()
-        except Exception: pass
+        try:
+            exe.shutdown()
+        except Exception:
+            pass
         if rclpy.ok():
-            try: rclpy.shutdown()
-            except Exception: pass
+            try:
+                rclpy.shutdown()
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":
