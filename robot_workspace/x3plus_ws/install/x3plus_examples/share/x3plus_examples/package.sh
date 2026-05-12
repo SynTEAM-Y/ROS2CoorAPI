@@ -82,7 +82,6 @@ _colcon_package_sh_source_script "$COLCON_CURRENT_PREFIX/share/x3plus_examples/h
 _colcon_package_sh_source_script "$COLCON_CURRENT_PREFIX/share/x3plus_examples/hook/pythonpath.sh"
 _colcon_package_sh_source_script "$COLCON_CURRENT_PREFIX/share/x3plus_examples/hook/pythonscriptspath.sh"
 _colcon_package_sh_source_script "$COLCON_CURRENT_PREFIX/share/x3plus_examples/hook/ament_prefix_path.sh"
-_colcon_package_sh_source_script "$COLCON_CURRENT_PREFIX/../../build/x3plus_examples/share/x3plus_examples/hook/pythonpath_develop.sh"
 
 unset _colcon_package_sh_source_script
 unset COLCON_CURRENT_PREFIX

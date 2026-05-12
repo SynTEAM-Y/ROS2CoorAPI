@@ -79,6 +79,18 @@ install(PROGRAMS scripts/x3plus_examples/arm_controller.py
 install(PROGRAMS scripts/x3plus_examples/gripper_mimic_relay.py
         DESTINATION lib/${PROJECT_NAME}
         RENAME gripper_mimic_relay)
+install(PROGRAMS scripts/x3plus_examples/gazebo_pose_tf_relay.py
+        DESTINATION lib/${PROJECT_NAME}
+        RENAME gazebo_pose_tf_relay)
+install(PROGRAMS scripts/x3plus_examples/robot_description_publisher.py
+        DESTINATION lib/${PROJECT_NAME}
+        RENAME robot_description_publisher)
+install(PROGRAMS scripts/x3plus_examples/diff_drive_simulator.py
+        DESTINATION lib/${PROJECT_NAME}
+        RENAME diff_drive_simulator)
+install(PROGRAMS scripts/x3plus_examples/map_publisher.py
+        DESTINATION lib/${PROJECT_NAME}
+        RENAME map_publisher)
 
 # Run linting
 if(BUILD_TESTING)

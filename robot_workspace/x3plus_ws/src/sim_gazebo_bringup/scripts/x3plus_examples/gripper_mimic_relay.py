@@ -81,10 +81,28 @@ class GripperMimicRelay(Node):
         )
 
     def _js_callback(self, msg: JointState):
-        # Pass joint states through unchanged. The URDF no longer has <mimic>
-        # tags on the finger joints, so RSP needs the real angles reported by
-        # Ignition for every joint (including the 5 "mimic" finger joints).
-        self.pub_js.publish(msg)
+        # Strip the 5 mimic finger joints from the raw Ignition joint_states.
+        # robot_state_publisher then computes those finger positions from the
+        # actual gripper joint and the URDF <mimic> relationships.
+        filtered = JointState()
+        filtered.header = msg.header
+        filtered.name = []
+        filtered.position = []
+        filtered.velocity = []
+        filtered.effort = []
+
+        for idx, name in enumerate(msg.name):
+            if name in MIMIC_MULTIPLIERS:
+                continue
+            filtered.name.append(name)
+            if idx < len(msg.position):
+                filtered.position.append(msg.position[idx])
+            if idx < len(msg.velocity):
+                filtered.velocity.append(msg.velocity[idx])
+            if idx < len(msg.effort):
+                filtered.effort.append(msg.effort[idx])
+
+        self.pub_js.publish(filtered)
 
     def _grip_cmd_callback(self, msg: Float64):
         # Just record latest target; ramping happens in _tick.

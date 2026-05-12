@@ -651,6 +651,15 @@
         <plugin filename="ignition-gazebo-imu-system"
                 name="ignition::gazebo::systems::Imu">
         </plugin>
+        <!-- Publishes the model's world pose so we can relay it into ROS /tf
+             as odom->base_footprint and keep RViz matched to Gazebo physics. -->
+        <plugin filename="ignition-gazebo-pose-publisher-system"
+                name="gz::sim::systems::PosePublisher">
+            <publish_link_pose>true</publish_link_pose>
+            <publish_collision_pose>false</publish_collision_pose>
+            <publish_visual_pose>false</publish_visual_pose>
+            <publish_nested_model_pose>false</publish_nested_model_pose>
+        </plugin>
     </gazebo>
 
     <!-- IMU sensor on the chassis. Publishes real chassis orientation (not

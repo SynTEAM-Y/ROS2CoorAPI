@@ -39,9 +39,48 @@ import subprocess
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, SetEnvironmentVariable
+from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
+
+
+def get_rviz_env_vars():
+    env = os.environ.copy()
+
+    ld_preload = "/lib/x86_64-linux-gnu/libc.so.6:/lib/x86_64-linux-gnu/libpthread.so.0"
+    if 'LD_PRELOAD' in env and env['LD_PRELOAD']:
+        env['LD_PRELOAD'] = ld_preload + ':' + env['LD_PRELOAD']
+    else:
+        env['LD_PRELOAD'] = ld_preload
+
+    system_libs = "/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu"
+    if 'LD_LIBRARY_PATH' in env and env['LD_LIBRARY_PATH']:
+        env['LD_LIBRARY_PATH'] = system_libs + ':' + env['LD_LIBRARY_PATH']
+    else:
+        env['LD_LIBRARY_PATH'] = system_libs
+
+    if 'DISPLAY' not in env and os.environ.get('DISPLAY'):
+        env['DISPLAY'] = os.environ['DISPLAY']
+    if 'WAYLAND_DISPLAY' not in env and os.environ.get('WAYLAND_DISPLAY'):
+        env['WAYLAND_DISPLAY'] = os.environ['WAYLAND_DISPLAY']
+    if 'XAUTHORITY' not in env and os.environ.get('XAUTHORITY'):
+        env['XAUTHORITY'] = os.environ['XAUTHORITY']
+    elif 'XAUTHORITY' not in env:
+        env['XAUTHORITY'] = os.path.expanduser('~/.Xauthority')
+
+    if 'XDG_RUNTIME_DIR' not in env and os.environ.get('XDG_RUNTIME_DIR'):
+        env['XDG_RUNTIME_DIR'] = os.environ['XDG_RUNTIME_DIR']
+
+    if 'ROS_PACKAGE_PATH' not in env and os.environ.get('ROS_PACKAGE_PATH'):
+        env['ROS_PACKAGE_PATH'] = os.environ['ROS_PACKAGE_PATH']
+    if 'AMENT_PREFIX_PATH' not in env and os.environ.get('AMENT_PREFIX_PATH'):
+        env['AMENT_PREFIX_PATH'] = os.environ['AMENT_PREFIX_PATH']
+
+    env['QT_QPA_PLATFORM'] = 'xcb'
+
+    return env
+
 
 def convert_package_uris_to_absolute_paths(urdf_content):
     """
@@ -162,22 +201,55 @@ def generate_launch_description():
             f"Error: {e}"
         )
     
-    yahboomcar_description_dir = get_package_share_directory('yahboomcar_description')
     sim_gazebo_bringup_dir = get_package_share_directory('sim_gazebo_bringup')
     
+    # Discover available maps for RViz. The default map is plain_map.
+    maps_dir = os.path.join(sim_gazebo_bringup_dir, 'maps')
+    if os.path.isdir(maps_dir):
+        available_maps = sorted(
+            os.path.splitext(f)[0]
+            for f in os.listdir(maps_dir)
+            if f.endswith('.yaml')
+        )
+    else:
+        available_maps = []
+
+    map_arg = DeclareLaunchArgument(
+        'map',
+        default_value='plain_map',
+        description=(
+            'Map to load for RViz (basename without .yaml or absolute .yaml path). '
+            'Available: ' + (', '.join(available_maps) if available_maps else '(none)')
+        ),
+    )
+
+    requested_map = _interactive_pick('map', available_maps if available_maps else ['plain_map'], 'plain_map')
+
+    if os.path.isabs(requested_map) and os.path.isfile(requested_map):
+        map_file = requested_map
+    else:
+        map_file = os.path.join(maps_dir, requested_map + '.yaml')
+        if not os.path.isfile(map_file):
+            raise RuntimeError(
+                f"Map '{requested_map}' not found. "
+                f"Available: {', '.join(available_maps)}. "
+                f"Pass map:=<name> or an absolute path to a .yaml file."
+            )
+
     # Paths
     # Prefer the modified URDF shipped with sim_gazebo_bringup (this is "your
-    # work, isolated" — see scripts/README.md). Fall back to the upstream
-    # yahboomcar_description URDF if the in-package one was not installed
-    # (e.g. cmake step did not run).
+    # work, isolated" — see scripts/README.md). This package is self-contained
+    # and does not depend on yahboomcar_description.
     in_pkg_xacro = os.path.join(sim_gazebo_bringup_dir, 'urdf', 'yahboomcar_X3plus.urdf.xacro')
     if os.path.isfile(in_pkg_xacro):
         xacro_file = in_pkg_xacro
         print(f'[sim_gazebo_bringup] Using in-package URDF: {xacro_file}')
     else:
-        xacro_file = os.path.join(yahboomcar_description_dir, 'urdf', 'yahboomcar_X3plus.urdf.xacro')
-        print(f'[sim_gazebo_bringup] Falling back to upstream URDF: {xacro_file}')
-    rviz_config_file = os.path.join(yahboomcar_description_dir, 'rviz', 'yahboomcar.rviz')
+        raise RuntimeError(
+            f"In-package URDF not found: {in_pkg_xacro}. "
+            "Please make sure sim_gazebo_bringup was built correctly."
+        )
+    rviz_config_file = os.path.join(sim_gazebo_bringup_dir, 'rviz', 'gazebo_view.rviz')
 
     # Resolve `world` (already chosen interactively above unless world:= was
     # passed; either way `requested_world` holds the basename / abs path).
@@ -282,6 +354,9 @@ def generate_launch_description():
             # The DiffDrive plugin in the URDF subscribes on the model-prefixed
             # topic (it ignores leading-slash overrides). We bridge that and
             # remap to /cmd_vel below so user nodes can keep using /cmd_vel.
+            # Ground-truth pose from Ignition PosePublisher. We bridge it to
+            # /gz_pose_tf and then rewrite the frame names into odom->base_footprint.
+            '/model/x3plus/pose@tf2_msgs/msg/TFMessage[ignition.msgs.Pose_V',
             '/model/x3plus/cmd_vel@geometry_msgs/msg/Twist]ignition.msgs.Twist',
             # Odometry: Ignition -> ROS (also remapped to /odom below)
             '/model/x3plus/odometry@nav_msgs/msg/Odometry[ignition.msgs.Odometry',
@@ -300,6 +375,7 @@ def generate_launch_description():
             ('/model/x3plus/cmd_vel', '/cmd_vel'),
             ('/model/x3plus/odometry', '/odom'),
             ('/model/x3plus/imu', '/imu'),
+            ('/model/x3plus/pose', '/gz_pose_tf'),
             # Route raw physics joint states to /joint_states_raw.
             # The gripper_mimic_relay node filters out the frozen mimic joints
             # and republishes to /joint_states so robot_state_publisher can
@@ -322,12 +398,26 @@ def generate_launch_description():
     # Set environment variables for Gazebo to find models and resources
     set_gazebo_model_path = SetEnvironmentVariable(
         'IGN_GAZEBO_RESOURCE_PATH',
-        yahboomcar_description_dir
+        sim_gazebo_bringup_dir
     )
     
     set_gazebo_model_path2 = SetEnvironmentVariable(
         'GAZEBO_MODEL_PATH',
-        yahboomcar_description_dir
+        sim_gazebo_bringup_dir
+    )
+
+    sim_gazebo_bringup_prefix = os.path.dirname(os.path.dirname(sim_gazebo_bringup_dir))
+    ros_gz_sim_prefix = os.path.dirname(os.path.dirname(ros_gz_sim_dir))
+    set_ament_prefix_path = SetEnvironmentVariable(
+        'AMENT_PREFIX_PATH',
+        os.pathsep.join([sim_gazebo_bringup_prefix, ros_gz_sim_prefix])
+    )
+    set_ros_package_path = SetEnvironmentVariable(
+        'ROS_PACKAGE_PATH',
+        os.pathsep.join([
+            os.path.join(sim_gazebo_bringup_prefix, 'share'),
+            os.path.join(ros_gz_sim_prefix, 'share'),
+        ])
     )
 
     # Create/spawn robot in Gazebo Sim
@@ -344,7 +434,25 @@ def generate_launch_description():
         ]
     )
 
-    # RViz node
+    env_vars = get_rviz_env_vars()
+
+    # Robot description publisher for RViz. RViz loads the URDF from the
+    # transient-local /robot_description topic, which avoids relying on an
+    # undeclared rviz2 parameter.
+    robot_description_publisher_node = Node(
+        package='sim_gazebo_bringup',
+        executable='robot_description_publisher',
+        name='robot_description_publisher',
+        output='screen',
+        parameters=[
+            {'use_sim_time': use_sim_time},
+            {'robot_description': robot_description_content}
+        ],
+    )
+
+    # RViz node. When use_rviz:=true, RViz is launched and the bridge uses
+    # the static map->odom transform so the configured Fixed Frame 'map' is
+    # available without a separate localization stack.
     rviz_node = Node(
         package='rviz2',
         executable='rviz2',
@@ -353,13 +461,54 @@ def generate_launch_description():
         arguments=['-d', rviz_config_file],
         parameters=[
             {'use_sim_time': use_sim_time}
-        ]
+        ],
+        env=env_vars,
+        condition=IfCondition(use_rviz),
+    )
+
+    # Odometry -> TF relay. Subscribes to /odom and republishes a single
+    # odom->base_footprint transform on /tf so RViz can connect map->odom->base_footprint.
+    gazebo_pose_tf_relay_node = Node(
+        package='sim_gazebo_bringup',
+        executable='gazebo_pose_tf_relay',
+        name='gazebo_pose_tf_relay',
+        output='screen',
+        parameters=[
+            {'use_sim_time': use_sim_time},
+            {'parent_frame': 'odom'},
+            {'child_frame': 'base_footprint'},
+            {'input_topic': '/odom'},
+        ],
+    )
+
+    # Static map -> odom. Required for RViz when Fixed Frame is set to 'map'.
+    static_map_to_odom = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        name='static_map_to_odom',
+        output='screen',
+        arguments=['0', '0', '0', '0', '0', '0', 'map', 'odom'],
+        parameters=[{'use_sim_time': use_sim_time}],
+        condition=IfCondition(use_rviz),
+    )
+
+    # Map Publisher - publishes the chosen map for RViz.
+    map_publisher_node = Node(
+        package='sim_gazebo_bringup',
+        executable='map_publisher',
+        name='map_publisher',
+        output='screen',
+        parameters=[
+            {'map_path': map_file},
+            {'use_sim_time': use_sim_time}
+        ],
+        condition=IfCondition(use_rviz),
     )
 
     # Mimic joint relay: strips passive finger joints from the raw Ignition
     # joint_states so robot_state_publisher computes them via URDF <mimic>.
     gripper_mimic_relay_node = Node(
-        package='x3plus_examples',
+        package='sim_gazebo_bringup',
         executable='gripper_mimic_relay',
         name='gripper_mimic_relay',
         output='screen',
@@ -371,20 +520,21 @@ def generate_launch_description():
         use_sim_time_arg,
         use_rviz_arg,
         world_arg,
+        map_arg,
         set_gazebo_model_path,
         set_gazebo_model_path2,
+        set_ament_prefix_path,
+        set_ros_package_path,
         robot_state_publisher_node,
         gazebo_launch,
         spawn_robot_node,
         ros_gz_bridge_node,
+        gazebo_pose_tf_relay_node,
+        static_map_to_odom,
+        map_publisher_node,
         gripper_mimic_relay_node,
+        robot_description_publisher_node,
+        rviz_node,
     ]
-    
-    # Note: RViz is not included in the default launch to match use_rviz:=false default parameter
-    # Users can launch RViz separately if needed via:
-    #   ros2 launch sim_gazebo_bringup robot_rviz.launch.py
-    # 
-    # For Humble compatibility, we don't conditionally include RViz here
-    # (IfAction doesn't exist in Humble's launch module)
-    
+
     return LaunchDescription(launch_desc)

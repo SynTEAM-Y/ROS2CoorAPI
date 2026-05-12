@@ -28,10 +28,10 @@ import sys
 import subprocess
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, ExecuteProcess, SetLaunchConfiguration
+from launch.conditions import IfCondition, UnlessCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
-from launch.actions import ExecuteProcess
 
 def convert_package_uris_to_file_uris(urdf_content):
     """
@@ -136,9 +136,11 @@ def get_env_vars():
     if 'XDG_RUNTIME_DIR' not in env and os.environ.get('XDG_RUNTIME_DIR'):
         env['XDG_RUNTIME_DIR'] = os.environ['XDG_RUNTIME_DIR']
     
-    # Force QT to use X11 platform
-    env['QT_QPA_PLATFORM'] = 'xcb'
-    
+    if 'ROS_PACKAGE_PATH' not in env and os.environ.get('ROS_PACKAGE_PATH'):
+        env['ROS_PACKAGE_PATH'] = os.environ['ROS_PACKAGE_PATH']
+    if 'AMENT_PREFIX_PATH' not in env and os.environ.get('AMENT_PREFIX_PATH'):
+        env['AMENT_PREFIX_PATH'] = os.environ['AMENT_PREFIX_PATH']
+
     return env
 
 def generate_launch_description():
@@ -149,8 +151,26 @@ def generate_launch_description():
         description='Use simulation time'
     )
 
+    with_gazebo_arg = DeclareLaunchArgument(
+        'with_gazebo',
+        default_value='false',
+        description=(
+            'Set to true when running alongside gazebo.launch.py. This disables '
+            'the standalone kinematic simulator while keeping RViz, the map, '
+            'and the static map->odom transform.'
+        ),
+    )
+
+    # When viewing a running Gazebo instance, RViz must use sim time to accept
+    # the bridged /tf transforms from Gazebo. This action ensures that
+    # with_gazebo:=true implies use_sim_time:=true.
+    set_use_sim_time = SetLaunchConfiguration(
+        'use_sim_time',
+        'true',
+        condition=IfCondition(LaunchConfiguration('with_gazebo')),
+    )
+
     # Get package shares
-    yahboomcar_description_dir = get_package_share_directory('yahboomcar_description')
     sim_gazebo_bringup_dir = get_package_share_directory('sim_gazebo_bringup')
 
     # Discover available maps in the installed maps/ directory so the user gets
@@ -192,14 +212,17 @@ def generate_launch_description():
     
     # Paths
     # Prefer the in-package URDF (your modified version installed by
-    # sim_gazebo_bringup). Fall back to upstream yahboomcar_description.
+    # sim_gazebo_bringup). This package is self-contained and does not
+    # depend on yahboomcar_description being installed in the environment.
     in_pkg_xacro = os.path.join(sim_gazebo_bringup_dir, 'urdf', 'yahboomcar_X3plus.urdf.xacro')
     if os.path.isfile(in_pkg_xacro):
         xacro_file = in_pkg_xacro
         print(f'[sim_gazebo_bringup] Using in-package URDF: {xacro_file}')
     else:
-        xacro_file = os.path.join(yahboomcar_description_dir, 'urdf', 'yahboomcar_X3plus.urdf.xacro')
-        print(f'[sim_gazebo_bringup] Falling back to upstream URDF: {xacro_file}')
+        raise RuntimeError(
+            f"In-package URDF not found: {in_pkg_xacro}. "
+            "Please make sure sim_gazebo_bringup was built correctly."
+        )
     rviz_config_file = os.path.join(sim_gazebo_bringup_dir, 'rviz', 'gazebo_view.rviz')
 
     # Get configuration values
@@ -258,33 +281,48 @@ def generate_launch_description():
         ]
     )
 
+    robot_description_publisher_node = Node(
+        package='sim_gazebo_bringup',
+        executable='robot_description_publisher',
+        name='robot_description_publisher',
+        output='screen',
+        parameters=[
+            {'use_sim_time': use_sim_time},
+            {'robot_description': robot_description_content}
+        ]
+    )
 
     # Joint states are now published by diff_drive_simulator (same timer as TF)
     # to eliminate timestamp jitter between separate publishers
 
-    # RViz process launched via ExecuteProcess with proper environment variables
-    rviz_proc = ExecuteProcess(
-        cmd=['/opt/ros/humble/lib/rviz2/rviz2', '-d', rviz_config_file],
+    # RViz node. Use the same simulation time setting so TF stamps are
+    # interpreted consistently when viewing Gazebo.
+    rviz_proc = Node(
+        package='rviz2',
+        executable='rviz2',
         name='rviz2',
         output='screen',
-        env=env_vars
+        arguments=['-d', rviz_config_file],
+        parameters=[{'use_sim_time': use_sim_time}],
+        env=env_vars,
     )
 
     # Differential Drive Simulator - Processes cmd_vel and updates robot pose in TF
-    # This allows the robot to move in RViz when velocity commands are published
+    # This is disabled under with_gazebo:=true because Gazebo physics already owns
+    # /cmd_vel and the ground-truth robot pose.
     diff_drive_sim_node = Node(
-        package='x3plus_examples',
+        package='sim_gazebo_bringup',
         executable='diff_drive_simulator',
         name='diff_drive_simulator',
-        output='screen'
+        output='screen',
+        condition=UnlessCondition(LaunchConfiguration('with_gazebo')),
     )
 
-    # Map Publisher - Loads and publishes map from files
-    # Displays the map in RViz so you can see robot movement in context
-    # (path resolved above from the `map` launch argument)
-    
+    # Map Publisher - Loads and publishes the chosen map to /map
+    # This is a local node in sim_gazebo_bringup, so the RViz-only mode is
+    # self-contained and does not depend on x3plus_examples.
     map_publisher_node = Node(
-        package='x3plus_examples',
+        package='sim_gazebo_bringup',
         executable='map_publisher',
         name='map_publisher',
         output='screen',
@@ -294,20 +332,25 @@ def generate_launch_description():
     # Static Transform: map to odom
     # This establishes the connection between the global map frame and the odometry frame
     # The robot starts at the origin of the map
-    map_to_odom_broadcaster = ExecuteProcess(
-        cmd=[
-            'ros2', 'run', 'tf2_ros', 'static_transform_publisher',
+    map_to_odom_broadcaster = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        name='static_transform_publisher',
+        output='screen',
+        arguments=[
             '0', '0', '0',           # x, y, z translation
             '0', '0', '0', '1',       # x, y, z, w quaternion (identity = no rotation)
             'map', 'odom'              # parent frame, child frame
         ],
-        output='screen'
     )
 
     return LaunchDescription([
         use_sim_time_arg,
+        with_gazebo_arg,
+        set_use_sim_time,
         map_arg,
         robot_state_publisher_node,
+        robot_description_publisher_node,
         rviz_proc,
         diff_drive_sim_node,
         map_publisher_node,
