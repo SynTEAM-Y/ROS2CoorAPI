@@ -1,10 +1,8 @@
 # Ignore all .log files
 *.log
-AgentHub
 logs
 log
 build
-install
 
 
 # Python

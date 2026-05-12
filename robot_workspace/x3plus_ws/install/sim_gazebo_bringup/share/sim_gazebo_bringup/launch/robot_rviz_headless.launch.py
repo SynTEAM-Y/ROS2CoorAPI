@@ -1,1 +1,1 @@
-/home/othman/ROS2CoorAPI/robot_workspace/x3plus_ws/src/sim_gazebo_bringup/launch/robot_rviz_headless.launch.py
+/home/assoc/ROS2CoorAPI/robot_workspace/x3plus_ws/src/sim_gazebo_bringup/launch/robot_rviz_headless.launch.py

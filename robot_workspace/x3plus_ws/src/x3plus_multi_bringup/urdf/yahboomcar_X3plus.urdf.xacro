@@ -17,15 +17,6 @@
     <material name="White">
         <color rgba="0.7 0.7 0.7 1"/>
     </material>
-    <material name="Black">
-        <color rgba="0.2 0.2 0.2 1"/>
-    </material>
-    <material name="Red">
-        <color rgba="1 0 0 1"/>
-    </material>
-    <material name="DarkGray">
-        <color rgba="0.3 0.3 0.3 1"/>
-    </material>
     <link name="${prefix}${ns}base_footprint"/>
     <link name="${prefix}${ns}imu_link"/>
     <!-- common link-->
@@ -110,7 +101,7 @@
             <inertia ixx="0" ixy="0" ixz="0" iyy="0" iyz="0" izz="0"/>
         </inertial>
     </xacro:common_link>
-    <xacro:fixed_joint name="camera_joint" parent="base_link" child="camera_link" xyz="0.043645 0 0.41955" rpy="0 0 0"/>
+    <xacro:fixed_joint name="camera_joint" parent="base_link" child="camera_link" xyz="-0.043645 0 0.41955" rpy="0 0 0"/>
 
     <xacro:common_link name="arm_link1" material="White" path="X3plus">
         <inertial>
@@ -277,7 +268,7 @@
                      izz="2.5696E-06"/>
         </inertial>
     </xacro:common_link>
-    <xacro:fixed_joint name="mono_joint" parent="arm_link4" child="mono_link" xyz="0.0481 -0.05145 -0.0022"
+    <xacro:fixed_joint name="mono_joint" parent="arm_link4" child="mono_link" xyz="-0.0481 -0.05145 -0.0022"
                  rpy="${pi/2} 0 0"/>
     <xacro:yahboomcar_X3plus_ros2_control
         name="${prefix}yahboomcar_hw"

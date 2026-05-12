@@ -1,1 +1,1 @@
-int32 data
+/home/assoc/ROS2CoorAPI/robot_workspace/x3plus_ws/build/astra_camera_msgs/rosidl_cmake/srv/SetInt32_Request.msg

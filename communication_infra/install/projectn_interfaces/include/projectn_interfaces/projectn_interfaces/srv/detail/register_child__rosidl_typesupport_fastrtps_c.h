@@ -1,0 +1,1 @@
+/home/assoc/ROS2CoorAPI/communication_infra/build/projectn_interfaces/rosidl_typesupport_fastrtps_c/projectn_interfaces/srv/detail/register_child__rosidl_typesupport_fastrtps_c.h

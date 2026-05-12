@@ -1,0 +1,1 @@
+/home/assoc/ROS2CoorAPI/communication_infra/build/projectn_interfaces/rosidl_cmake/rosidl_cmake-extras.cmake

@@ -1,0 +1,1 @@
+/home/assoc/ROS2CoorAPI/communication_infra/build/projectn_interfaces/rosidl_generator_cpp/projectn_interfaces/msg/detail/r_msg__traits.hpp

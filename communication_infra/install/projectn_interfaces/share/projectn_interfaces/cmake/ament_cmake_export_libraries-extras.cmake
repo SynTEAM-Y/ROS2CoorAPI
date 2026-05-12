@@ -1,0 +1,1 @@
+/home/assoc/ROS2CoorAPI/communication_infra/build/projectn_interfaces/ament_cmake_export_libraries/ament_cmake_export_libraries-extras.cmake
