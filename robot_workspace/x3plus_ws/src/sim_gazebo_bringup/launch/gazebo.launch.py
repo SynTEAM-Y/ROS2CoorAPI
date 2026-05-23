@@ -124,6 +124,8 @@ def _interactive_pick(label, choices, default):
 
     - If a value is already supplied via `<label>:=...` on the command line,
       that value is used and no prompt is shown.
+    - If SIM_GAZEBO_BRINGUP_NO_PROMPT=1 is set (by a parent launch file),
+      the value from SIM_GAZEBO_BRINGUP_<LABEL> is used, or the default.
     - If stdin/stdout is not a TTY (e.g. launch from another launch file),
       the default is used silently.
     - Empty input -> default. Invalid input -> re-prompt.
@@ -132,6 +134,10 @@ def _interactive_pick(label, choices, default):
     for a in sys.argv:
         if a.startswith(prefix):
             return a.split(':=', 1)[1]
+    env_no_prompt = os.environ.get('SIM_GAZEBO_BRINGUP_NO_PROMPT', '0')
+    if env_no_prompt == '1':
+        env_key = f'SIM_GAZEBO_BRINGUP_{label.upper()}'
+        return os.environ.get(env_key, default)
     if not (sys.stdin.isatty() and sys.stdout.isatty()):
         return default
     print()

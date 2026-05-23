@@ -66,38 +66,39 @@
       <direction>-0.5 0.1 -0.9</direction>
     </light>
 
-    <!-- Simple obstacles (optional) -->
-    <model name="box_1">
-      <pose>2 2 0.5 0 0 0</pose>
+    <!-- Wall — static obstacle that the robot must avoid.
+         Dimensions: 2 m wide x 0.15 m thick x 0.5 m tall.
+         The landing pad is placed in front (south) of this wall
+         at (2.0, 1.2), and the robot places the blue cube there. -->
+    <model name="wall">
+      <static>true</static>
+      <pose>2 2 0.25 0 0 0</pose>
       <link name="link">
-        <inertial>
-          <mass>1.0</mass>
-          <inertia>
-            <ixx>0.083</ixx>
-            <ixy>0</ixy>
-            <ixz>0</ixz>
-            <iyy>0.083</iyy>
-            <iyz>0</iyz>
-            <izz>0.083</izz>
-          </inertia>
-        </inertial>
         <collision name="collision">
           <geometry>
             <box>
-              <size>1 1 1</size>
+              <size>2.0 0.15 0.5</size>
             </box>
           </geometry>
+          <surface>
+            <friction>
+              <ode>
+                <mu>1.0</mu>
+                <mu2>1.0</mu2>
+              </ode>
+            </friction>
+          </surface>
         </collision>
         <visual name="visual">
           <geometry>
             <box>
-              <size>1 1 1</size>
+              <size>2.0 0.15 0.5</size>
             </box>
           </geometry>
           <material>
-            <ambient>0.5 0.5 0.5 1</ambient>
-            <diffuse>0.7 0.7 0.7 1</diffuse>
-            <specular>0.5 0.5 0.5 1</specular>
+            <ambient>0.6 0.5 0.4 1</ambient>
+            <diffuse>0.8 0.7 0.6 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
           </material>
         </visual>
       </link>

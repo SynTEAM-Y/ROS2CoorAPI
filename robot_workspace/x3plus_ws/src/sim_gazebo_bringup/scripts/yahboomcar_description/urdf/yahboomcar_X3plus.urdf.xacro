@@ -674,15 +674,18 @@
         </sensor>
     </gazebo>
 
-    <!-- Disable gravity on the passive mimic gripper links so they do not flop in Gazebo.
+    <!-- Enable gravity on the passive mimic gripper links so they do not flop in Gazebo.
          Mimic constraints are not enforced by Ignition physics, but with gravity off
-         these links remain at their spawn pose instead of falling free.                  -->
-    <gazebo reference="llink1"><gravity>0</gravity><collision><surface><contact><collide_bitmask>0x00</collide_bitmask></contact></surface></collision></gazebo>
-    <gazebo reference="llink2"><gravity>0</gravity><collision><surface><contact><collide_bitmask>0x00</collide_bitmask></contact></surface></collision></gazebo>
-    <gazebo reference="llink3"><gravity>0</gravity><collision><surface><contact><collide_bitmask>0x00</collide_bitmask></contact></surface></collision></gazebo>
-    <gazebo reference="rlink1"><gravity>0</gravity><collision><surface><contact><collide_bitmask>0x00</collide_bitmask></contact></surface></collision></gazebo>
-    <gazebo reference="rlink2"><gravity>0</gravity><collision><surface><contact><collide_bitmask>0x00</collide_bitmask></contact></surface></collision></gazebo>
-    <gazebo reference="rlink3"><gravity>0</gravity><collision><surface><contact><collide_bitmask>0x00</collide_bitmask></contact></surface></collision></gazebo>
+         these links remain at their spawn pose instead of falling free.
+         collide_bitmask=0xFF enables collision with everything so the fingers
+         can actually grip the cube.  mu1=mu2=30.0 provides high friction to
+         prevent the cube from sliding.                                       -->
+    <gazebo reference="llink1"><gravity>0</gravity><mu1>30.0</mu1><mu2>30.0</mu2><collision><surface><contact><collide_bitmask>0xFF</collide_bitmask></contact></surface></collision></gazebo>
+    <gazebo reference="llink2"><gravity>0</gravity><mu1>30.0</mu1><mu2>30.0</mu2><collision><surface><contact><collide_bitmask>0xFF</collide_bitmask></contact></surface></collision></gazebo>
+    <gazebo reference="llink3"><gravity>0</gravity><mu1>30.0</mu1><mu2>30.0</mu2><collision><surface><contact><collide_bitmask>0xFF</collide_bitmask></contact></surface></collision></gazebo>
+    <gazebo reference="rlink1"><gravity>0</gravity><mu1>30.0</mu1><mu2>30.0</mu2><collision><surface><contact><collide_bitmask>0xFF</collide_bitmask></contact></surface></collision></gazebo>
+    <gazebo reference="rlink2"><gravity>0</gravity><mu1>30.0</mu1><mu2>30.0</mu2><collision><surface><contact><collide_bitmask>0xFF</collide_bitmask></contact></surface></collision></gazebo>
+    <gazebo reference="rlink3"><gravity>0</gravity><mu1>30.0</mu1><mu2>30.0</mu2><collision><surface><contact><collide_bitmask>0xFF</collide_bitmask></contact></surface></collision></gazebo>
 
 
     <!-- ==================== LEGACY GAZEBO CLASSIC DIFF DRIVE (DISABLED) ==================== -->

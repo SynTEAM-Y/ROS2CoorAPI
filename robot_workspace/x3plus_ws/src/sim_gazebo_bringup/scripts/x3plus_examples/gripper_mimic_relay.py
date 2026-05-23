@@ -69,7 +69,7 @@ class GripperMimicRelay(Node):
         # Rate-limited target ramp: avoids step inputs that cause PID jolt + detach.
         self._target = 0.0      # latest user setpoint
         self._current = 0.0     # currently published (ramped) setpoint
-        self._rate = 0.6        # rad/s ramp speed (~1 s for full open)
+        self._rate = 5.0        # rad/s ramp speed (~0.3 s for full open)
         self._dt = 0.02         # 50 Hz publish
         self._timer = self.create_timer(self._dt, self._tick)
 

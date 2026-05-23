@@ -1,0 +1,52 @@
+<?xml version="1.0" ?>
+<sdf version="1.6">
+  <model name="test_block">
+    <static>false</static>
+    <pose>0.0 0.0 0.02 0 0 0</pose>
+    <link name="base_link">
+      <inertial>
+        <!-- 20 g — light enough for the gripper to lift securely. -->
+        <mass>0.02</mass>
+        <inertia>
+          <ixx>3.33e-6</ixx>
+          <iyy>3.33e-6</iyy>
+          <izz>3.33e-6</izz>
+        </inertia>
+      </inertial>
+      <collision name="collision">
+        <geometry>
+          <box>
+            <size>0.04 0.04 0.04</size>
+          </box>
+        </geometry>
+        <surface>
+          <friction>
+            <ode>
+              <mu>30.0</mu>
+              <mu2>30.0</mu2>
+            </ode>
+          </friction>
+          <contact>
+            <ode>
+              <kp>100000.0</kp>
+              <kd>50.0</kd>
+              <max_vel>1.0</max_vel>
+              <min_depth>0.001</min_depth>
+            </ode>
+          </contact>
+        </surface>
+      </collision>
+      <visual name="visual">
+        <geometry>
+          <box>
+            <size>0.04 0.04 0.04</size>
+          </box>
+        </geometry>
+        <material>
+          <ambient>0.0 0.5 1.0 1.0</ambient>
+          <diffuse>0.0 0.5 1.0 1.0</diffuse>
+        </material>
+      </visual>
+    </link>
+  </model>
+</sdf>

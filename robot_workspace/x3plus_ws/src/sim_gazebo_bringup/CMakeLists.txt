@@ -26,10 +26,22 @@ install(
   DESTINATION share/${PROJECT_NAME}/maps
 )
 
+# Copy configuration files (nav2_params.yaml, etc.)
+install(
+  DIRECTORY config/
+  DESTINATION share/${PROJECT_NAME}/config
+)
+
 # Copy RViz configuration files to install directory
 install(
   DIRECTORY rviz/
   DESTINATION share/${PROJECT_NAME}/rviz
+)
+
+# Copy custom models (test_block, landing_pad) to install directory
+install(
+  DIRECTORY models/
+  DESTINATION share/${PROJECT_NAME}/models
 )
 
 # ===== Isolated overrides (your work, kept inside this package) =====
@@ -91,6 +103,27 @@ install(PROGRAMS scripts/x3plus_examples/diff_drive_simulator.py
 install(PROGRAMS scripts/x3plus_examples/map_publisher.py
         DESTINATION lib/${PROJECT_NAME}
         RENAME map_publisher)
+install(PROGRAMS scripts/x3plus_examples/pick_and_place.py
+        DESTINATION lib/${PROJECT_NAME}
+        RENAME pick_and_place)
+install(PROGRAMS scripts/x3plus_examples/spawn_test_object.py
+        DESTINATION lib/${PROJECT_NAME}
+        RENAME spawn_test_object)
+install(PROGRAMS scripts/x3plus_examples/object_detector.py
+        DESTINATION lib/${PROJECT_NAME}
+        RENAME object_detector)
+install(PROGRAMS scripts/x3plus_examples/object_navigator.py
+        DESTINATION lib/${PROJECT_NAME}
+        RENAME object_navigator)
+install(PROGRAMS scripts/x3plus_examples/trajectory_bridge.py
+        DESTINATION lib/${PROJECT_NAME}
+        RENAME trajectory_bridge)
+install(PROGRAMS scripts/x3plus_examples/send_goal.py
+        DESTINATION lib/${PROJECT_NAME}
+        RENAME send_goal)
+install(PROGRAMS scripts/x3plus_examples/sensor_visualizer.py
+        DESTINATION lib/${PROJECT_NAME}
+        RENAME sensor_visualizer)
 
 # Run linting
 if(BUILD_TESTING)
