@@ -20,16 +20,7 @@ Or if that doesn't work due to conflicts, use the RViz-only launch instead:
 Usage:
     ros2 launch sim_gazebo_bringup gazebo.launch.py
 
-Optional arguments:
-    use_rviz:=false                  - Disable RViz (default: true)
-    use_sim_time:=false              - Disable simulated time (default: true)
-    world:=office                    - World to load. Options come from the
-                                       worlds/ directory of this package.
-                                       Defaults to 'empty'. Examples:
-                                         world:=empty
-                                         world:=office
-                                       You may also pass an absolute path to a
-                                       custom .sdf file.
+
 """
 
 import os
@@ -172,7 +163,6 @@ def generate_launch_description():
         default_value='true',
         description='Start RViz visualization'
     )
-
     # Discover available worlds in the installed worlds/ directory so the user
     # gets a helpful list if they pick a name that doesn't exist.
     sim_gazebo_bringup_dir_early = get_package_share_directory('sim_gazebo_bringup')
@@ -362,26 +352,37 @@ def generate_launch_description():
             # remap to /cmd_vel below so user nodes can keep using /cmd_vel.
             # Ground-truth pose from Ignition PosePublisher. We bridge it to
             # /gz_pose_tf and then rewrite the frame names into odom->base_footprint.
-            '/model/x3plus/pose@tf2_msgs/msg/TFMessage[ignition.msgs.Pose_V',
+            '/model/x3plus/tf@tf2_msgs/msg/TFMessage[ignition.msgs.Pose_V',
             '/model/x3plus/cmd_vel@geometry_msgs/msg/Twist]ignition.msgs.Twist',
             # Odometry: Ignition -> ROS (also remapped to /odom below)
             '/model/x3plus/odometry@nav_msgs/msg/Odometry[ignition.msgs.Odometry',
             # IMU: Ignition -> ROS. Used by manual_control's closed-loop 90° turn
             # to read real chassis yaw (wheel-odom yaw is wrong when wheels slip).
             '/model/x3plus/imu@sensor_msgs/msg/Imu[ignition.msgs.IMU',
+            # Contact sensors on gripper fingers: Ignition -> ROS
+            '/model/x3plus/contact/llink2@ros_gz_interfaces/msg/Contacts[ignition.msgs.Contacts',
+            '/model/x3plus/contact/rlink2@ros_gz_interfaces/msg/Contacts[ignition.msgs.Contacts',
             # Joint states: Ignition Model -> ROS sensor_msgs/JointState
             f'{joint_state_topic}@sensor_msgs/msg/JointState[ignition.msgs.Model',
             # Simulation clock: Ignition -> ROS
             '/clock@rosgraph_msgs/msg/Clock[ignition.msgs.Clock',
+            # Camera topics: Ignition -> ROS
+            '/depth_camera/image@sensor_msgs/msg/Image[ignition.msgs.Image',
+            '/depth_camera/depth_image@sensor_msgs/msg/Image[ignition.msgs.Image',
+            '/depth_camera/camera_info@sensor_msgs/msg/CameraInfo[ignition.msgs.CameraInfo',
+            '/wrist_mono_camera/image@sensor_msgs/msg/Image[ignition.msgs.Image',
+            '/wrist_mono_camera/camera_info@sensor_msgs/msg/CameraInfo[ignition.msgs.CameraInfo',
         ],
         remappings=[
             # User-facing topic names: keep /cmd_vel and /odom on the ROS side
             # while the bridge actually talks to the model-prefixed Ignition
             # topics that the DiffDrive plugin uses.
+            ('/depth_camera/image', '/mono_camera/image_raw'),
+            ('/wrist_mono_camera/image', '/wrist_mono_camera/image_raw'),
             ('/model/x3plus/cmd_vel', '/cmd_vel'),
             ('/model/x3plus/odometry', '/odom'),
             ('/model/x3plus/imu', '/imu'),
-            ('/model/x3plus/pose', '/gz_pose_tf'),
+            ('/model/x3plus/tf', '/gz_pose_tf'),
             # Route raw physics joint states to /joint_states_raw.
             # The gripper_mimic_relay node filters out the frozen mimic joints
             # and republishes to /joint_states so robot_state_publisher can
@@ -472,8 +473,11 @@ def generate_launch_description():
         condition=IfCondition(use_rviz),
     )
 
-    # Odometry -> TF relay. Subscribes to /odom and republishes a single
-    # odom->base_footprint transform on /tf so RViz can connect map->odom->base_footprint.
+    # Ground-truth pose -> TF relay. Subscribes to the Ignition PosePublisher
+    # (bridged to /gz_pose_tf) and republishes a single odom->base_footprint
+    # transform on /tf. Using ground truth (not wheel /odom) keeps the TF tree
+    # heading correct under skid so the autopilot faces the cube and 90 deg
+    # turns toward the drop zone land where intended.
     gazebo_pose_tf_relay_node = Node(
         package='sim_gazebo_bringup',
         executable='gazebo_pose_tf_relay',
@@ -483,11 +487,17 @@ def generate_launch_description():
             {'use_sim_time': use_sim_time},
             {'parent_frame': 'odom'},
             {'child_frame': 'base_footprint'},
-            {'input_topic': '/odom'},
+            {'input_topic': '/gz_pose_tf'},
+            {'input_type': 'tf'},
+            {'source_child': 'base_footprint'},
         ],
     )
 
-    # Static map -> odom. Required for RViz when Fixed Frame is set to 'map'.
+    # Static map -> odom. Provides the 'map' frame so TF chains that
+    # need map -> odom -> base_footprint -> ... work even without AMCL
+    # (e.g. when no lidar/scan data is available in Gazebo).
+    # NOTE: When Nav2 is active AMCL also publishes map->odom. Having both
+    # can cause intermittent TF lookup warnings but the tree still resolves.
     static_map_to_odom = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
@@ -495,7 +505,6 @@ def generate_launch_description():
         output='screen',
         arguments=['0', '0', '0', '0', '0', '0', 'map', 'odom'],
         parameters=[{'use_sim_time': use_sim_time}],
-        condition=IfCondition(use_rviz),
     )
 
     # Map Publisher - publishes the chosen map for RViz.

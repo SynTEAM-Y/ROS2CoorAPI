@@ -1,1 +1,0 @@
-/home/assoc/ROS2CoorAPI/robot_workspace/x3plus_ws/build/astra_camera_msgs/rosidl_generator_cpp/astra_camera_msgs/msg/detail/extrinsics__builder.hpp

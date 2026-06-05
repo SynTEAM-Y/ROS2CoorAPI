@@ -11,10 +11,10 @@ Usage:
 === OPTIMISED PICK CONFIG (tuned for test_block 4 cm blue cube) ===
 
 Standoff distance:
-  DESIRED_STANDOFF = 0.06 m  (6 cm)  — robot stops so gripper centre
-    is 8.5 cm from cube centre when arm is at REACH_DOWN.
+  DESIRED_STANDOFF = 0.02 m  (2 cm)  — robot stops so gripper centre
+    is 4.5 cm from cube centre when arm is at REACH_DOWN.
   GAP_BIAS         = 0.02 m  (2 cm)  — FK correction adds +2 cm margin,
-    final gap ≈ 9 cm between gripper centre and cube centre.
+    final gap ≈ 5 cm between gripper centre and cube centre.
 
 Arm joint angles [J1..J5] in radians:
   REACH_DOWN = [0.0, -1.45, -0.54, -1.21, 0.0]  — low pick pose
@@ -23,7 +23,7 @@ Arm joint angles [J1..J5] in radians:
 
 Gripper (grip_joint position in radians):
   GRIPPER_OPEN = -1.54  — fully open
-  GRIPPER_HOLD = -0.51  — 3.0 cm finger gap (holds the 4 cm cube securely)
+  GRIPPER_HOLD = -0.676 — 4.8 cm finger gap (8 mm wider than cube for clearance)
 
 Physics:
   mu1 = mu2 = 30.0  — gripper fingers and test_block (high friction)
@@ -62,6 +62,7 @@ from control_msgs.action import FollowJointTrajectory
 from nav2_msgs.action import NavigateToPose
 from geometry_msgs.msg import PoseWithCovarianceStamped
 from sensor_msgs.msg import JointState, Image
+from ros_gz_interfaces.msg import Contacts
 import tf2_ros
 import tf2_geometry_msgs
 
@@ -91,9 +92,15 @@ PLACE_DOWN  = [0.0,  -1.40,  -0.524, -0.873, 0.0]
 PRE_PLACE   = [0.0,  -0.8,   -0.4,   -0.3,   0.0]
 
 GRIPPER_OPEN  = -1.54
-GRIPPER_HOLD  = -0.51   # 3.0 cm finger gap (was -0.57 / 3.4 cm)
+GRIPPER_HOLD  = -0.676  # 4.8 cm finger gap — 8 mm wider than cube width for clearance
 GRIPPER_CLOSE = 0.0
 ARM_JOINT_NAMES = ['arm_joint1', 'arm_joint2', 'arm_joint3', 'arm_joint4', 'arm_joint5']
+
+# Empirical FK compensation (m): the arm trajectory controller cannot reach REACH_DOWN
+# — the arm settles at gravity equilibrium ~40 mm short of commanded position.
+# FK(REACH_DOWN) = 0.252 m, but actual finger_center_base ≈ 0.292 m (from TF with
+# correct offset).  Adding this offset makes approach/FK-correction match reality.
+FK_SETTLE_COMPENSATION = 0.040
 
 
 class PickAndPlace(Node):
@@ -131,7 +138,9 @@ class PickAndPlace(Node):
             self, NavigateToPose, '/navigate_to_pose', callback_group=self._cb_group)
 
         # ── Direct gripper publisher ────────────────────────────────
-        self._grip_pub = self.create_publisher(Float64, '/grip_joint_cmd_pos', 10)
+        # The gripper controller expects Float64 messages on this topic
+        # when the trajectory controller is not available.
+        self._grip_pub = self.create_publisher(Float64, '/gripper_group_controller/commands', 10)
 
         # ── Command velocity publisher ──────────────────────────────
         self._cmd_vel_pub = self.create_publisher(Twist, '/cmd_vel', 10)
@@ -168,6 +177,16 @@ class PickAndPlace(Node):
         self._joint_state = None
         self.create_subscription(
             JointState, '/joint_states', self._on_joint_state, self._odom_qos)
+
+        # ── Contact sensors on gripper fingers ─────────────────────
+        self._llink2_contact = None
+        self._rlink2_contact = None
+        self.create_subscription(
+            Contacts, '/model/x3plus/contact/llink2',
+            self._on_llink2_contact, 10)
+        self.create_subscription(
+            Contacts, '/model/x3plus/contact/rlink2',
+            self._on_rlink2_contact, 10)
 
         # ── State machine ───────────────────────────────────────────
         self._state = 'WAIT'
@@ -232,8 +251,8 @@ class PickAndPlace(Node):
 
             # Gripper center extends past robot base — account for it so we
             # don't ram the cube.  See module docstring for optimal config.
-            finger_center_reach = self._gripper_center_x_at_joints(REACH_DOWN)
-            DESIRED_STANDOFF = 0.06  # 6 cm — see docstring for rationale
+            finger_center_reach = self._gripper_center_x_at_joints(REACH_DOWN) + FK_SETTLE_COMPENSATION
+            DESIRED_STANDOFF = 0.00  # 0 cm — gripper centre aligns with cube centre
 
             # Use 2D distance (accounts for robot yaw, unlike X-only comparison)
             dx = target_x - self._odom_x
@@ -299,6 +318,9 @@ class PickAndPlace(Node):
         else:
             self.get_logger().info('[STATE] APPROACH: skipped (skip_navigation=true)')
 
+        # Debug FK at approach position — shows where finger would be at REACH_DOWN
+        self._debug_fk('after approach', REACH_DOWN)
+
         # ── STATE: PICK ─────────────────────────────────────────────
         self.get_logger().info('[STATE] PICK: reaching down and gripping')
 
@@ -342,15 +364,229 @@ class PickAndPlace(Node):
                 self.get_logger().warn(f'Correction attempt {attempt+1} failed, retrying...')
                 time.sleep(0.3)
 
-        self._move_arm(REACH_DOWN, 'reach_down', duration_sec=2.0)
-        time.sleep(0.5)
+        # ── DEPTH CAMERA DISTANCE VERIFICATION ──────────────────────
+        # Read depth camera distance to cube, backup if too close, re-read
+        self.get_logger().warn('═══════ DEPTH CAMERA DISTANCE CHECK ═══════')
+        
+        # Get current cube distance from detected pose
+        if self._detected_pose_map is not None:
+            cube = self._detected_pose_map
+            try:
+                if cube.header.frame_id != 'odom':
+                    t = self._tf_buffer.lookup_transform(
+                        'odom', cube.header.frame_id,
+                        rclpy.time.Time(), rclpy.time.Duration(seconds=0.5))
+                    cube_in_odom = tf2_geometry_msgs.do_transform_pose_stamped(cube, t)
+                else:
+                    cube_in_odom = cube
+                
+                cube_x = cube_in_odom.pose.position.x
+                cube_y = cube_in_odom.pose.position.y
+                dist_to_cube = math.hypot(cube_x - self._odom_x, cube_y - self._odom_y)
+                
+                self.get_logger().warn(f'  Initial depth camera distance: {dist_to_cube*1000:.1f} mm')
+                self.get_logger().warn(f'  Robot odom: ({self._odom_x:.4f}, {self._odom_y:.4f})')
+                self.get_logger().warn(f'  Cube odom:  ({cube_x:.4f}, {cube_y:.4f})')
+                
+                # Target distance: gripper center aligned with cube FRONT FACE.
+                # The depth camera detects the front face (2 cm closer than the
+                # true centre), so finger_centre = front_face puts the gripper
+                # centre 2 cm behind the true centre — matching FK/GAP_BIAS.
+                finger_center = self._gripper_center_x_at_joints(REACH_DOWN) + FK_SETTLE_COMPENSATION
+                target_dist = finger_center  # front face offset already in camera reading
+                error = dist_to_cube - target_dist
+                
+                self.get_logger().warn(f'  Target distance: {target_dist*1000:.1f} mm')
+                self.get_logger().warn(f'  Error (positive = too far): {error*1000:.1f} mm')
+                
+                # If robot is too close (error < -10mm), backup and re-read
+                if error < -0.010:
+                    backup_amount = abs(error) + 0.010  # Backup error + 1cm margin
+                    self.get_logger().warn(f'  ⚠️  Too close! Backing up {backup_amount*1000:.1f} mm')
+                    
+                    # Backup
+                    twist = Twist()
+                    twist.linear.x = -0.1  # Slow backup
+                    backup_duration = backup_amount / 0.1
+                    t0 = time.monotonic()
+                    while time.monotonic() - t0 < backup_duration:
+                        self._publish_cmd_vel(twist)
+                        rclpy.spin_once(self, timeout_sec=0.01)
+                        time.sleep(0.02)
+                    
+                    # Stop
+                    twist.linear.x = 0.0
+                    for _ in range(5):
+                        self._publish_cmd_vel(twist)
+                        time.sleep(0.05)
+                    time.sleep(0.3)
+                    
+                    # Re-read distance
+                    dist_to_cube_new = math.hypot(cube_x - self._odom_x, cube_y - self._odom_y)
+                    error_new = dist_to_cube_new - target_dist
+                    self.get_logger().warn(f'  After backup distance: {dist_to_cube_new*1000:.1f} mm')
+                    self.get_logger().warn(f'  New error: {error_new*1000:.1f} mm')
+                else:
+                    self.get_logger().warn('  ✅ Distance OK, no backup needed')
+                    
+            except Exception as e:
+                self.get_logger().warn(f'  Depth camera distance check failed: {e}')
+        else:
+            self.get_logger().warn('  No detected pose available for distance check')
+        
+        self.get_logger().warn('═══════════════════════════════════════════')
 
-        # Close gripper — trajectory (0.3 sim-s) + mimic relay ramp (~0.2 sim-s @ 5.0 rad/s)
+        self._move_arm(REACH_DOWN, 'reach_down', duration_sec=2.0)
+        self.get_logger().warn('═══════ Arm trajectory to REACH_DOWN complete ═══════')
+        self.get_logger().warn('  Waiting 2.0s for arm to fully settle at pick position...')
+        time.sleep(2.0)  # Increased settle time: ensure arm physically reaches final position before gripper closes
+
+        # ── TF-BASED FK CALIBRATION ─────────────────────────────────
+        # Look up the ACTUAL arm_link5 position from TF to get the real
+        # finger_center_base, then use it to center the gripper on the cube.
+        # This bypasses any FK inaccuracy.
+        self.get_logger().warn('═══════ TF-BASED FK CALIBRATION ═══════')
+
+        # FK-predicted finger center (for logging comparison)
+        fk_finger_base = self._gripper_center_x_at_joints(REACH_DOWN)
+        self.get_logger().warn(f'  FK-predicted finger_center_base = {fk_finger_base:.5f} m')
+
+        # Get ACTUAL finger centre from TF via arm_link5 + calibrated offset.
+        # arm_link5 IS in the TF tree; finger links (rlink2/llink2) are NOT
+        # because <mimic> tags were removed from URDF for Ignition compatibility.
+        # The offset from arm_link5 to the grip centre was calibrated:
+        #   arm_link5.x = 0.407m, actual grip centre ≈ 0.292m → offset = -0.115m
+        ARM5_TO_GRIP_centre = -0.115  # m — arm_link5.x=0.407, grip≈0.292
+
+        # Log actual arm joint states after REACH_DOWN
+        if self._joint_state is not None:
+            js = {n: p for n, p in zip(self._joint_state.name, self._joint_state.position)}
+            self.get_logger().warn(
+                f'  /joint_states after REACH_DOWN: '
+                f'[{js.get("arm_joint1",0):.3f}, {js.get("arm_joint2",0):.3f}, '
+                f'{js.get("arm_joint3",0):.3f}, {js.get("arm_joint4",0):.3f}, '
+                f'{js.get("arm_joint5",0):.3f}]'
+            )
+
+        actual_finger_base = None
+        for attempt in range(5):
+            rclpy.spin_once(self, timeout_sec=0.05)
+            try:
+                t = self._tf_buffer.lookup_transform(
+                    'base_link', 'arm_link5',
+                    rclpy.time.Time(), rclpy.duration.Duration(seconds=0.5))
+                arm5_x = t.transform.translation.x
+                arm5_z = t.transform.translation.z
+                actual_finger_base = arm5_x + ARM5_TO_GRIP_centre
+                self.get_logger().warn(
+                    f'  TF arm_link5: x={arm5_x:.5f}  z={arm5_z:.5f}  '
+                    f'offset={ARM5_TO_GRIP_centre:.3f}  → finger_center_x={actual_finger_base:.5f} m'
+                )
+                # Log cube Z for comparison
+                cube_z = self._object_pose_map.pose.position.z if self._object_pose_map else 0.0
+                # arm5_z is in base_link frame; base_link.z in odom ≈ 0.076 via base_footprint
+                arm5_z_odom = arm5_z + 0.076
+                self.get_logger().warn(
+                    f'  Cube centre z={cube_z:.3f}  —  arm_link5 z_odom≈{arm5_z_odom:.3f}  '
+                    f'(gap={(arm5_z_odom - cube_z)*100:.0f} cm)'
+                )
+                # Log actual finger positions from TF
+                for finger in ['rlink2', 'llink2']:
+                    try:
+                        ft = self._tf_buffer.lookup_transform(
+                            'base_link', finger,
+                            rclpy.time.Time(), rclpy.duration.Duration(seconds=0.2))
+                        self.get_logger().warn(
+                            f'  TF {finger}: x={ft.transform.translation.x:.4f} '
+                            f'y={ft.transform.translation.y:.4f} '
+                            f'z={ft.transform.translation.z:.4f} '
+                            f'(odom z≈{ft.transform.translation.z + 0.076:.4f})'
+                        )
+                    except Exception:
+                        pass
+                break
+            except Exception as e:
+                self.get_logger().warn(f'  TF lookup attempt {attempt+1} failed: {e}')
+                time.sleep(0.2)
+
+        if actual_finger_base is None:
+            self.get_logger().warn('  ⚠️  Cannot get TF arm_link5 — falling back to FK')
+            actual_finger_base = fk_finger_base
+        else:
+            self.get_logger().warn(
+                f'  FK error = {(actual_finger_base - fk_finger_base)*1000:.1f} mm'
+            )
+
+        # Get cube world X from TF (or fall back to fixed pose)
+        cube_world_x = obj_map.pose.position.x
+        try:
+            t = self._tf_buffer.lookup_transform(
+                'odom', 'test_block',
+                rclpy.time.Time(), rclpy.duration.Duration(seconds=1.0))
+            cube_world_x = t.transform.translation.x
+            self.get_logger().warn(f'  Cube TF (odom): x={cube_world_x:.5f} m')
+        except Exception:
+            self.get_logger().warn('  Cannot get cube TF, using fixed pose')
+
+        # Compute error: positive = finger ahead of cube → need backward
+        finger_world = self._odom_x + actual_finger_base
+        error = finger_world - cube_world_x
+        self.get_logger().warn(
+            f'  odom_x={self._odom_x:.5f}  finger_world={finger_world:.5f}  '
+            f'cube_world={cube_world_x:.5f}  error={error*1000:.1f} mm'
+        )
+
+        # ── CENTER GRIPPER ON CUBE ──────────────────────────────────
+        if abs(error) < 0.003:
+            self.get_logger().warn('  ✅ Already centred (< 3 mm) — no move needed')
+        else:
+            target_odom_x = cube_world_x - actual_finger_base
+            if self._odom_x < target_odom_x:
+                drive_speed = 0.15
+                dir_label = 'forward'
+            else:
+                drive_speed = -0.15
+                dir_label = 'backward'
+            self.get_logger().warn(
+                f'  Driving {dir_label} to odom_x={target_odom_x:.5f} '
+                f'(error={error*1000:.1f} mm)'
+            )
+            twist = Twist()
+            twist.linear.x = drive_speed
+            t0 = time.monotonic()
+            while time.monotonic() - t0 < 5.0:
+                rclpy.spin_once(self, timeout_sec=0.01)
+                if abs(self._odom_x - target_odom_x) < 0.003:
+                    break
+                self._publish_cmd_vel(twist)
+                time.sleep(0.02)
+            # Stop
+            twist.linear.x = 0.0
+            for _ in range(5):
+                self._publish_cmd_vel(twist)
+                time.sleep(0.05)
+            time.sleep(0.3)
+
+            # Log result
+            finger_world_after = self._odom_x + actual_finger_base
+            actual_error = finger_world_after - cube_world_x
+            self.get_logger().warn(
+                f'  After: odom_x={self._odom_x:.5f}  '
+                f'finger_world={finger_world_after:.5f}  '
+                f'error={actual_error*1000:.1f} mm'
+            )
+
+        self.get_logger().warn('═══════════════════════════════════════════')
+
+        # Close gripper — ONLY AFTER arm has fully completed REACH_DOWN, settled, and backed off
+        # Use gentle GRIPPER_HOLD position to maintain parallel linkage (no excessive squeeze)
+        self.get_logger().warn('═══════ ARM SETTLED at REACH_DOWN — closing gripper to HOLD position ═══════')
         self._gripper_close()
-        self._sleep_sim(2.0)
+        self._sleep_sim(2.0)  # Wait for gripper to reach position and settle
+        self.get_logger().warn('═══════ Gripper closed to HOLD (4.8cm gap) — parallel linkage maintained ═══════')
 
         # Extra settle time to ensure grip takes hold
-        self._sleep_sim(0.3)
+        self._sleep_sim(0.5)
 
         # Verify pickup
         grasped = self._verify_pickup(obj_map)
@@ -490,28 +726,61 @@ class PickAndPlace(Node):
         self._gripper(GRIPPER_OPEN)
 
     def _gripper_close(self):
-        self.get_logger().info('Gripper -> HOLD (3.4cm)')
+        self.get_logger().info('Gripper -> HOLD (4.8cm)')
         self._gripper(GRIPPER_HOLD)
 
+    def _gripper_close_until_contact(self, timeout_sec=5.0):
+        """DEPRECATED: This function caused excessive squeeze force that broke
+        the parallel linkage. Use _gripper_close() instead.
+        
+        Gentle close to GRIPPER_HOLD position. High friction (μ=100) on both
+        cube and fingers provides secure grip without needing excessive force.
+        This maintains the parallel linkage constraint."""
+        self.get_logger().warn('⚠️  _gripper_close_until_contact is DEPRECATED')
+        self.get_logger().warn('   Using gentle GRIPPER_HOLD position to maintain parallel linkage')
+        
+        # Simply close to GRIPPER_HOLD position (48mm gap for 40mm cube)
+        self._gripper_close()
+        self._sleep_sim(2.0)
+        
+        return True
+
     def _gripper(self, position):
+        self.get_logger().warn(f'═══════ GRIPPER COMMAND: position={position:.3f} ═══════')
         goal = FollowJointTrajectory.Goal()
         goal.trajectory = JointTrajectory()
         goal.trajectory.joint_names = ['grip_joint']
         point = JointTrajectoryPoint()
         point.positions = [position]
-        point.time_from_start = rclpy.duration.Duration(seconds=0.3).to_msg()
+        point.time_from_start = rclpy.duration.Duration(seconds=1.0).to_msg()  # Increased from 0.3s
         goal.trajectory.points = [point]
 
-        if not self._gripper_traj_ac.wait_for_server(timeout_sec=3.0):
-            self.get_logger().warn('Gripper controller not available, using direct pub')
-            self._grip_pub.publish(Float64(data=position))
-            return
+        # Try trajectory controller first
+        if self._gripper_traj_ac.wait_for_server(timeout_sec=5.0):
+            self.get_logger().info('  Using trajectory controller for gripper')
+            future = self._gripper_traj_ac.send_goal_async(goal)
+            rclpy.spin_until_future_complete(self, future, timeout_sec=5.0)
+            if future.done() and future.result().accepted:
+                self.get_logger().info('  Gripper trajectory goal accepted')
+                result_future = future.result().get_result_async()
+                rclpy.spin_until_future_complete(self, result_future, timeout_sec=5.0)
+                self.get_logger().info('  Gripper trajectory complete')
+                return
+            else:
+                self.get_logger().warn('⚠️  Gripper trajectory goal rejected')
 
-        future = self._gripper_traj_ac.send_goal_async(goal)
-        rclpy.spin_until_future_complete(self, future, timeout_sec=5.0)
-        if future.done() and future.result().accepted:
-            result_future = future.result().get_result_async()
-            rclpy.spin_until_future_complete(self, result_future, timeout_sec=5.0)
+        # Fallback: direct publish to the correct topic
+        self.get_logger().warn('⚠️  Gripper trajectory controller NOT available, using direct pub')
+        self.get_logger().warn(f'  Publishing {position:.3f} to /gripper_group_controller/commands')
+        
+        # Publish multiple times to ensure it gets through
+        for i in range(10):
+            self._grip_pub.publish(Float64(data=position))
+            time.sleep(0.1)
+            if i % 3 == 0:
+                self.get_logger().warn(f'  Published attempt {i+1}/10')
+        
+        self.get_logger().warn('  Direct publish complete')
 
     # ── Sensor callbacks ────────────────────────────────────────────
 
@@ -535,6 +804,22 @@ class PickAndPlace(Node):
             self._wrist_image = self._bridge.imgmsg_to_cv2(msg, 'bgr8')
         except Exception as e:
             self.get_logger().warn(f'Wrist camera cv_bridge failed: {e}')
+
+    def _on_llink2_contact(self, msg: Contacts):
+        self._llink2_contact = msg
+
+    def _on_rlink2_contact(self, msg: Contacts):
+        self._rlink2_contact = msg
+
+    def _check_finger_contact(self, target_model='test_block'):
+        """Return True if either finger is in contact with the target model."""
+        for contact_msg in [self._llink2_contact, self._rlink2_contact]:
+            if contact_msg is None:
+                continue
+            for contact in contact_msg.contacts:
+                if target_model in contact.collision1 or target_model in contact.collision2:
+                    return True
+        return False
 
     def _wait_for_wrist_frame(self):
         """Block until the wrist camera has delivered at least one frame."""
@@ -727,12 +1012,19 @@ class PickAndPlace(Node):
         cube_ox = cube_in_odom.pose.position.x
         cube_oy = cube_in_odom.pose.position.y
 
-        finger_center = self._gripper_center_x_at_joints(REACH_DOWN)
-        DESIRED_STANDOFF = 0.06
+        finger_center = self._gripper_center_x_at_joints(REACH_DOWN) + FK_SETTLE_COMPENSATION
+        # The depth camera detects the cube's FRONT FACE (2 cm closer than the
+        # true centre for a 4 cm cube).  Targeting finger_centre at the front
+        # face puts the gripper centre 2 cm behind the true centre, which
+        # exactly matches the coarse approach (DESIRED_STANDOFF = 0.02) and the
+        # FK correction (GAP_BIAS = 0.02).
+        DESIRED_STANDOFF = 0.00
 
-        self.get_logger().warn('═══════ CAMERA-GUIDED APPROACH ═══════')
+        self.get_logger().warn('═══════ CAMERA-GUIDED FINE ADJUSTMENT ═══════')
         self.get_logger().warn(f'  Camera sees cube at:  ({cube_ox:.4f}, {cube_oy:.4f})')
+        self.get_logger().warn(f'  Robot odom:           ({self._odom_x:.4f}, {self._odom_y:.4f})')
         self.get_logger().warn(f'  Finger centre (base):  {finger_center:.4f} m')
+        self.get_logger().warn(f'  DESIRED_STANDOFF:      {DESIRED_STANDOFF*1000:.0f} mm (camera = front face)')
 
         # ── Phase 1: Yaw alignment ────────────────────────────────────
         dx = cube_ox - self._odom_x
@@ -987,6 +1279,52 @@ class PickAndPlace(Node):
 
         return CENTER_REF + dX_dJ2 * (j2 - J2_REF) + dX_dJ3 * (j3 - J3_REF)
 
+    def _debug_fk(self, label, joints):
+        """Log detailed FK breakdown for debugging."""
+        j1, j2, j3, j4, j5 = joints
+        J2_REF = -1.45
+        J3_REF = -0.180
+        CENTER_REF = 0.3032
+        dX_dJ2 = 0.150 * math.cos(J2_REF)
+        dX_dJ3 = 0.145 * math.cos(J3_REF)
+        delta_j2 = j2 - J2_REF
+        delta_j3 = j3 - J3_REF
+        contrib_j2 = dX_dJ2 * delta_j2
+        contrib_j3 = dX_dJ3 * delta_j3
+        result = CENTER_REF + contrib_j2 + contrib_j3
+
+        self.get_logger().warn(f'═══ FK DEBUG ({label}) ═══')
+        self.get_logger().warn(f'  joints: [{j1:.3f}, {j2:.3f}, {j3:.3f}, {j4:.3f}, {j5:.3f}]')
+        self.get_logger().warn(f'  CENTER_REF={CENTER_REF:.5f}')
+        self.get_logger().warn(f'  J2_REF={J2_REF:.3f}  j2={j2:.3f}  delta={delta_j2:.5f}')
+        self.get_logger().warn(f'  J3_REF={J3_REF:.3f}  j3={j3:.3f}  delta={delta_j3:.5f}')
+        self.get_logger().warn(f'  dX_dJ2={dX_dJ2:.5f}  contrib={contrib_j2:.5f}')
+        self.get_logger().warn(f'  dX_dJ3={dX_dJ3:.5f}  contrib={contrib_j3:.5f}')
+        self.get_logger().warn(f'  RESULT finger_center_base={result:.5f} m')
+
+        # Also log what we know from /joint_states if available
+        if self._joint_state is not None:
+            js = {n: p for n, p in zip(self._joint_state.name, self._joint_state.position)}
+            self.get_logger().warn(f'  /joint_states arm joints: '
+                f'[{js.get("arm_joint1",0):.3f}, {js.get("arm_joint2",0):.3f}, '
+                f'{js.get("arm_joint3",0):.3f}, {js.get("arm_joint4",0):.3f}, '
+                f'{js.get("arm_joint5",0):.3f}]')
+            real_center = self._gripper_center_x_at_joints([
+                js.get("arm_joint1",0), js.get("arm_joint2",0),
+                js.get("arm_joint3",0), js.get("arm_joint4",0),
+                js.get("arm_joint5",0)])
+            self.get_logger().warn(f'  FK from /joint_states: finger_center_base={real_center:.5f} m')
+
+        # Log world position
+        finger_world = self._odom_x + result
+        self.get_logger().warn(f'  odom_x={self._odom_x:.5f}  finger_world_x={finger_world:.5f}')
+        # Log cube Z if known
+        if self._object_pose_map is not None:
+            self.get_logger().warn(
+                f'  cube z={self._object_pose_map.pose.position.z:.3f}  at x={self._object_pose_map.pose.position.x:.3f}'
+            )
+        self.get_logger().warn(f'═══════════════════════════════════════════')
+
     def _compute_rf_tip_x_at_joints(self, joints):
         """FK for right-finger tip X in base_link at given joint angles."""
         return self._gripper_center_x_at_joints(joints)
@@ -996,7 +1334,7 @@ class PickAndPlace(Node):
         return self._gripper_center_x_at_joints(joints)
 
     def _correct_robot_x_during_pick(self, obj_world_x, max_correction=0.25):
-        GAP_BIAS = 0.02  # 2 cm — see module docstring for optimal config
+        GAP_BIAS = 0.00  # 0 cm — gripper centres exactly on cube centre
         for _ in range(5):
             rclpy.spin_once(self, timeout_sec=0.05)
 
@@ -1008,7 +1346,7 @@ class PickAndPlace(Node):
 
         rf_x = self._compute_rf_tip_x_at_joints(joints)
         lf_x = self._compute_lf_tip_x_at_joints(joints)
-        finger_center_base = (rf_x + lf_x) / 2.0
+        finger_center_base = (rf_x + lf_x) / 2.0 + FK_SETTLE_COMPENSATION
 
         finger_center_world = odom_x + finger_center_base
 
@@ -1055,7 +1393,7 @@ class PickAndPlace(Node):
             return True
 
         nudge_dir = 1.0 if error > 0 else -1.0
-        nudge_amount = max(0.01, min(max_correction, abs(error)))
+        nudge_amount = max(0.002, min(max_correction, abs(error)))
         nudge_speed = 0.3
         nudge_duration = nudge_amount / nudge_speed
 

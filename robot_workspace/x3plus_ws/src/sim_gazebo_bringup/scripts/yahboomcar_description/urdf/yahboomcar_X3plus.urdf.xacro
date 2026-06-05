@@ -29,14 +29,14 @@
         <link name="${name}">
             <visual>
                 <geometry>
-                    <mesh filename="package://yahboomcar_description/meshes/${path}/visual/${name}.STL"/>
+                    <mesh filename="package://sim_gazebo_bringup/meshes/${path}/visual/${name}.STL"/>
                 </geometry>
                 <origin xyz="0 0 0" rpy="0 0 0"/>
                 <material name="${material}"/>
             </visual>
             <collision>
                 <geometry>
-                    <mesh filename="package://yahboomcar_description/meshes/${path}/collision/${name}.STL"/>
+                    <mesh filename="package://sim_gazebo_bringup/meshes/${path}/collision/${name}.STL"/>
                 </geometry>
                 <origin xyz="0 0 0" rpy="0 0 0"/>
             </collision>
@@ -545,9 +545,9 @@
             <!-- Sized for a small plastic finger. P=200 / cmd_max=100 was launching
                  the whole robot on the first 'open gripper' command because the
                  100 N·m wrist torque propagated through the arm to base_link. -->
-            <p_gain>15</p_gain> <i_gain>0.0</i_gain>  <d_gain>0.0</d_gain>
+            <p_gain>100</p_gain> <i_gain>0.0</i_gain>  <d_gain>0.0</d_gain>
             <i_max>0</i_max> <i_min>0</i_min>
-            <cmd_max>1.5</cmd_max> <cmd_min>-1.5</cmd_min>
+            <cmd_max>5.0</cmd_max> <cmd_min>-5.0</cmd_min>
             <initial_position>0</initial_position>
         </plugin>
         <!-- ==================== MIMIC GRIPPER FINGER CONTROLLERS ====================
@@ -558,53 +558,53 @@
              to each /<mimic>_cmd_pos topic with the URDF multiplier baked in.
              Finger inertias are bumped to 1e-5 (above) and gravity is disabled
              on the finger links (below) so these tiny PID loops stay stable. -->
-        <!-- All 5 mimic PIDs tracked-but-tame: P=8 / cmd_max=1.0 keeps the
-             tiny (~1 g, 1e-5 kg·m²) finger links from being launched into a
-             runaway spin ("fan" effect) by the relay command. With the joints
-             now type='revolute' the PID also can't wind up across +/-pi. -->
+        <!-- All 5 mimic PIDs matched to grip_joint: P=100 / cmd_max=5.0
+             so the connecting rods (rlink3, llink3) can track the grip force
+             without detaching. With the joints now type='revolute' the PID
+             also can't wind up across +/-pi. -->
         <plugin filename="ignition-gazebo-joint-position-controller-system"
                 name="ignition::gazebo::systems::JointPositionController">
             <joint_name>llink_joint1</joint_name>
             <topic>/llink_joint1_cmd_pos</topic>
-            <p_gain>15</p_gain> <i_gain>0.0</i_gain>  <d_gain>0.0</d_gain>
+            <p_gain>100</p_gain> <i_gain>0.0</i_gain>  <d_gain>0.0</d_gain>
             <i_max>0</i_max> <i_min>0</i_min>
-            <cmd_max>1.5</cmd_max> <cmd_min>-1.5</cmd_min>
+            <cmd_max>5.0</cmd_max> <cmd_min>-5.0</cmd_min>
             <initial_position>0</initial_position>
         </plugin>
         <plugin filename="ignition-gazebo-joint-position-controller-system"
                 name="ignition::gazebo::systems::JointPositionController">
             <joint_name>llink_joint2</joint_name>
             <topic>/llink_joint2_cmd_pos</topic>
-            <p_gain>15</p_gain> <i_gain>0.0</i_gain>  <d_gain>0.0</d_gain>
+            <p_gain>100</p_gain> <i_gain>0.0</i_gain>  <d_gain>0.0</d_gain>
             <i_max>0</i_max> <i_min>0</i_min>
-            <cmd_max>1.5</cmd_max> <cmd_min>-1.5</cmd_min>
+            <cmd_max>5.0</cmd_max> <cmd_min>-5.0</cmd_min>
             <initial_position>0</initial_position>
         </plugin>
         <plugin filename="ignition-gazebo-joint-position-controller-system"
                 name="ignition::gazebo::systems::JointPositionController">
             <joint_name>llink_joint3</joint_name>
             <topic>/llink_joint3_cmd_pos</topic>
-            <p_gain>15</p_gain> <i_gain>0.0</i_gain>  <d_gain>0.0</d_gain>
+            <p_gain>100</p_gain> <i_gain>0.0</i_gain>  <d_gain>0.0</d_gain>
             <i_max>0</i_max> <i_min>0</i_min>
-            <cmd_max>1.5</cmd_max> <cmd_min>-1.5</cmd_min>
+            <cmd_max>5.0</cmd_max> <cmd_min>-5.0</cmd_min>
             <initial_position>0</initial_position>
         </plugin>
         <plugin filename="ignition-gazebo-joint-position-controller-system"
                 name="ignition::gazebo::systems::JointPositionController">
             <joint_name>rlink_joint2</joint_name>
             <topic>/rlink_joint2_cmd_pos</topic>
-            <p_gain>15</p_gain> <i_gain>0.0</i_gain>  <d_gain>0.0</d_gain>
+            <p_gain>100</p_gain> <i_gain>0.0</i_gain>  <d_gain>0.0</d_gain>
             <i_max>0</i_max> <i_min>0</i_min>
-            <cmd_max>1.5</cmd_max> <cmd_min>-1.5</cmd_min>
+            <cmd_max>5.0</cmd_max> <cmd_min>-5.0</cmd_min>
             <initial_position>0</initial_position>
         </plugin>
         <plugin filename="ignition-gazebo-joint-position-controller-system"
                 name="ignition::gazebo::systems::JointPositionController">
             <joint_name>rlink_joint3</joint_name>
             <topic>/rlink_joint3_cmd_pos</topic>
-            <p_gain>15</p_gain> <i_gain>0.0</i_gain>  <d_gain>0.0</d_gain>
+            <p_gain>100</p_gain> <i_gain>0.0</i_gain>  <d_gain>0.0</d_gain>
             <i_max>0</i_max> <i_min>0</i_min>
-            <cmd_max>1.5</cmd_max> <cmd_min>-1.5</cmd_min>
+            <cmd_max>5.0</cmd_max> <cmd_min>-5.0</cmd_min>
             <initial_position>0</initial_position>
         </plugin>
         <!-- ==================== IGNITION DIFFERENTIAL DRIVE ==================== -->
@@ -651,10 +651,16 @@
         <plugin filename="ignition-gazebo-imu-system"
                 name="ignition::gazebo::systems::Imu">
         </plugin>
+        <!-- Required for the contact sensors on the gripper fingers to detect
+             collision with the object being grasped. -->
+        <plugin filename="ignition-gazebo-contact-system"
+                name="ignition::gazebo::systems::Contact">
+        </plugin>
         <!-- Publishes the model's world pose so we can relay it into ROS /tf
              as odom->base_footprint and keep RViz matched to Gazebo physics. -->
         <plugin filename="ignition-gazebo-pose-publisher-system"
                 name="gz::sim::systems::PosePublisher">
+            <topic>/model/x3plus/pose</topic>
             <publish_link_pose>true</publish_link_pose>
             <publish_collision_pose>false</publish_collision_pose>
             <publish_visual_pose>false</publish_visual_pose>
@@ -674,6 +680,46 @@
         </sensor>
     </gazebo>
 
+    <!-- Depth camera on camera_link -->
+    <gazebo reference="camera_link">
+        <sensor name="depth_camera" type="rgbd">
+            <always_on>1</always_on>
+            <update_rate>10.0</update_rate>
+            <camera>
+                <horizontal_fov>1.047</horizontal_fov>
+                <image>
+                    <width>640</width>
+                    <height>480</height>
+                </image>
+                <clip>
+                    <near>0.05</near>
+                    <far>10.0</far>
+                </clip>
+            </camera>
+            <topic>/depth_camera</topic>
+        </sensor>
+    </gazebo>
+
+    <!-- Wrist monocular camera on mono_link -->
+    <gazebo reference="mono_link">
+        <sensor name="wrist_mono_camera" type="camera">
+            <always_on>1</always_on>
+            <update_rate>10.0</update_rate>
+            <camera>
+                <horizontal_fov>1.047</horizontal_fov>
+                <image>
+                    <width>640</width>
+                    <height>480</height>
+                </image>
+                <clip>
+                    <near>0.05</near>
+                    <far>10.0</far>
+                </clip>
+            </camera>
+            <topic>/wrist_mono_camera</topic>
+        </sensor>
+    </gazebo>
+
     <!-- Enable gravity on the passive mimic gripper links so they do not flop in Gazebo.
          Mimic constraints are not enforced by Ignition physics, but with gravity off
          these links remain at their spawn pose instead of falling free.
@@ -681,11 +727,36 @@
          can actually grip the cube.  mu1=mu2=30.0 provides high friction to
          prevent the cube from sliding.                                       -->
     <gazebo reference="llink1"><gravity>0</gravity><mu1>30.0</mu1><mu2>30.0</mu2><collision><surface><contact><collide_bitmask>0xFF</collide_bitmask></contact></surface></collision></gazebo>
-    <gazebo reference="llink2"><gravity>0</gravity><mu1>30.0</mu1><mu2>30.0</mu2><collision><surface><contact><collide_bitmask>0xFF</collide_bitmask></contact></surface></collision></gazebo>
+    <gazebo reference="llink2"><gravity>0</gravity><mu1>100.0</mu1><mu2>100.0</mu2><collision><surface><contact><collide_bitmask>0xFF</collide_bitmask></contact></surface></collision></gazebo>
     <gazebo reference="llink3"><gravity>0</gravity><mu1>30.0</mu1><mu2>30.0</mu2><collision><surface><contact><collide_bitmask>0xFF</collide_bitmask></contact></surface></collision></gazebo>
     <gazebo reference="rlink1"><gravity>0</gravity><mu1>30.0</mu1><mu2>30.0</mu2><collision><surface><contact><collide_bitmask>0xFF</collide_bitmask></contact></surface></collision></gazebo>
-    <gazebo reference="rlink2"><gravity>0</gravity><mu1>30.0</mu1><mu2>30.0</mu2><collision><surface><contact><collide_bitmask>0xFF</collide_bitmask></contact></surface></collision></gazebo>
+    <gazebo reference="rlink2"><gravity>0</gravity><mu1>100.0</mu1><mu2>100.0</mu2><collision><surface><contact><collide_bitmask>0xFF</collide_bitmask></contact></surface></collision></gazebo>
     <gazebo reference="rlink3"><gravity>0</gravity><mu1>30.0</mu1><mu2>30.0</mu2><collision><surface><contact><collide_bitmask>0xFF</collide_bitmask></contact></surface></collision></gazebo>
+
+    <!-- Contact sensors on the gripper finger pads (llink2, rlink2) to detect
+         collision with the object during grasping. The pick_and_place node
+         subscribes to these topics and stops the gripper closing when contact
+         is detected. -->
+    <gazebo reference="llink2">
+        <sensor name="llink2_contact" type="contact">
+            <always_on>true</always_on>
+            <update_rate>100</update_rate>
+            <topic>/model/x3plus/contact/llink2</topic>
+            <contact>
+                <collision>llink2_collision</collision>
+            </contact>
+        </sensor>
+    </gazebo>
+    <gazebo reference="rlink2">
+        <sensor name="rlink2_contact" type="contact">
+            <always_on>true</always_on>
+            <update_rate>100</update_rate>
+            <topic>/model/x3plus/contact/rlink2</topic>
+            <contact>
+                <collision>rlink2_collision</collision>
+            </contact>
+        </sensor>
+    </gazebo>
 
 
     <!-- ==================== LEGACY GAZEBO CLASSIC DIFF DRIVE (DISABLED) ==================== -->

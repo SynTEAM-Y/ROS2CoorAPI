@@ -1,1 +1,0 @@
-/home/assoc/ROS2CoorAPI/robot_workspace/x3plus_ws/build/astra_camera_msgs/rosidl_typesupport_introspection_c/astra_camera_msgs/srv/detail/get_camera_info__rosidl_typesupport_introspection_c.h

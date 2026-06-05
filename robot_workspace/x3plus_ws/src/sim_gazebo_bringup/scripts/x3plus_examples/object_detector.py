@@ -111,6 +111,8 @@ class ObjectDetector(Node):
             self.get_logger().warn(f'Depth conversion failed: {e}')
 
     def _hsv_params(self):
+        if not CV_AVAILABLE:
+            return None, None
         g = self.get_parameter
         return (np.array([g('hsv_lower_h').value, g('hsv_lower_s').value, g('hsv_lower_v').value]),
                 np.array([g('hsv_upper_h').value, g('hsv_upper_s').value, g('hsv_upper_v').value]))

@@ -3,6 +3,23 @@
   <model name="test_block">
     <static>false</static>
     <pose>0.0 0.0 0.02 0 0 0</pose>
+
+    <!--
+      PosePublisher system plugin: causes Ignition Gazebo to publish the
+      ground-truth model pose on /model/test_block/tf (ignition.msgs.Pose_V).
+      The ros_gz_bridge in vision_autopilot.launch.py bridges this topic to
+      /gz_test_block_tf, and gazebo_pose_tf_relay re-publishes it as the
+      'odom -> test_block' TF so that _cube_is_lifted() can read the cube's
+      real height in the ROS TF tree.
+    -->
+    <plugin filename="ignition-gazebo-pose-publisher-system"
+            name="ignition::gazebo::systems::PosePublisher">
+      <publish_link_pose>false</publish_link_pose>
+      <publish_nested_model_pose>false</publish_nested_model_pose>
+      <publish_model_pose>true</publish_model_pose>
+      <update_rate>20</update_rate>
+    </plugin>
+
     <link name="base_link">
       <inertial>
         <!-- 20 g — light enough for the gripper to lift securely. -->
@@ -22,8 +39,8 @@
         <surface>
           <friction>
             <ode>
-              <mu>30.0</mu>
-              <mu2>30.0</mu2>
+              <mu>100.0</mu>
+              <mu2>100.0</mu2>
             </ode>
           </friction>
           <contact>

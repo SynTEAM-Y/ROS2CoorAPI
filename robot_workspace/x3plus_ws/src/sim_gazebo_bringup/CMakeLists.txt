@@ -112,6 +112,9 @@ install(PROGRAMS scripts/x3plus_examples/spawn_test_object.py
 install(PROGRAMS scripts/x3plus_examples/object_detector.py
         DESTINATION lib/${PROJECT_NAME}
         RENAME object_detector)
+install(PROGRAMS scripts/x3plus_examples/debug_vision.py
+        DESTINATION lib/${PROJECT_NAME}
+        RENAME debug_vision)
 install(PROGRAMS scripts/x3plus_examples/object_navigator.py
         DESTINATION lib/${PROJECT_NAME}
         RENAME object_navigator)
@@ -124,6 +127,9 @@ install(PROGRAMS scripts/x3plus_examples/send_goal.py
 install(PROGRAMS scripts/x3plus_examples/sensor_visualizer.py
         DESTINATION lib/${PROJECT_NAME}
         RENAME sensor_visualizer)
+install(PROGRAMS scripts/x3plus_examples/vision_pick_place.py
+        DESTINATION lib/${PROJECT_NAME}
+        RENAME vision_pick_place)
 
 # Run linting
 if(BUILD_TESTING)
