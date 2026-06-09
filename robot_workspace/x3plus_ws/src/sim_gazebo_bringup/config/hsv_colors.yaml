@@ -1,0 +1,27 @@
+# HSV color ranges for object detection
+# Format: [H, S, V] where H is 0-180, S and V are 0-255 in OpenCV
+# 
+# Calibrated for Gazebo test_block (blue/cyan cube)
+# To recalibrate, run object_detector with calibrate_mode:=true
+
+red:
+  lower: [0, 85, 126]
+  upper: [9, 253, 255]
+
+green:
+  lower: [55, 128, 146]
+  upper: [125, 253, 255]
+
+blue:
+  lower: [80, 50, 50]
+  upper: [120, 255, 255]
+
+yellow:
+  lower: [24, 98, 245]
+  upper: [125, 253, 255]
+
+# Detection parameters
+detection:
+  min_area: 200
+  max_objects: 5
+  depth_scale: 0.001

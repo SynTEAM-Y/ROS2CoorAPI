@@ -57,16 +57,13 @@
         </joint>
     </xacro:macro>
 
-    <!-- Gripper finger joint (was 'continuous_joint' macro).
-         IMPORTANT: <mimic> has been REMOVED. In Ignition Fortress the <mimic>
-         tag conflicts with the per-joint JointPositionController plugins
-         (sometimes kinematically locking the joint, sometimes letting it
-         shake) and produced asymmetric behavior between the L and R fingers.
-         The gripper_mimic_relay node now performs the mimic in software by
-         fanning out /grip_joint_cmd_pos to each /<joint>_cmd_pos with the
-         multiplier baked in, and by republishing the actual Gazebo joint
-         angles into /joint_states for RViz/RSP. The 'mimic' parameter is
-         kept for backward signature compatibility but is unused. -->
+    <!-- Gripper finger joint macro.
+         <mimic> tags are emitted so robot_state_publisher can compute finger
+         link TF positions (rlink2/llink2 etc.) from the master grip_joint.
+         Ignition Fortress ignores <mimic> for physics — actual finger motion
+         is driven by per-joint JointPositionController plugins fed by
+         gripper_mimic_relay. The relay also strips mimic joints from
+         /joint_states_raw so RSP recomputes them from the URDF <mimic>. -->
     <xacro:macro name="continuous_joint" params="name parent child xyz rpy mimic">
         <joint name="${ns}/${name}" type="revolute">
             <parent link="${ns}/${parent}"/>
@@ -80,6 +77,12 @@
                  tiny 1-gram finger links, so 4 of 5 mimic joints stayed frozen
                  while only rlink_joint2 (under load asymmetry) overshot. -->
             <dynamics damping="0.05" friction="0.005"/>
+            <!-- <mimic> tag: required by robot_state_publisher to compute finger
+                 link TF positions from the master grip_joint. Ignition Fortress
+                 ignores <mimic> for physics (handled by JointPositionController
+                 plugins + gripper_mimic_relay), but RSP needs it to publish
+                 rlink2/llink2/rlink3/llink3 frames in the TF tree. -->
+            <mimic joint="grip_joint" multiplier="${mimic}" offset="0"/>
         </joint>
     </xacro:macro>
 
