@@ -449,78 +449,103 @@ class VisionPickPlace(Node):
             self.get_logger().warn('⚠️ Camera-guided alignment timed out or failed. Falling back.')
 
         # ── STATE: PICK (High precision grip and lift) ────────────
-        # ROS1-style: use ONLY camera for alignment, NO TF corrections
+        # Manufacturer (ROS1) approach: use ONLY camera pixel alignment.
+        # No TF-based base corrections during picking.
+        # Condition: abs(pixel_x - 320) < 10 AND pixel_y > 440
+        # Joint1 computed from pixel_x: pos1 = 0.2128 * pixel_x + 21.91 (degrees)
+        # Pick pose: [pos1, 7, 60, 38, 90] degrees → URDF radians
         self.state = self.STATE_PICK
-        self.get_logger().info(f'[STATE] {self.state}: Executing ROS1-style picking routine')
+        self.get_logger().info(f'[STATE] {self.state}: Executing manufacturer-style picking routine')
 
-        # Step 1: Move arm to REACH_DOWN (ROS1 pick pose)
-        self.get_logger().info('  Moving arm to REACH_DOWN (ROS1 pose)...')
-        self._gripper_open()  # ROS1 opens gripper before lowering
-        self._sleep_sim(0.3)
-        self._move_arm(REACH_DOWN, 'reach_down', duration_sec=1.5)
-        self.get_logger().info('  Arm at REACH_DOWN, waiting for settle...')
-        time.sleep(0.5)
+        # Wait for camera pick condition: cube centered and close
+        cam_ready = self._wait_for_pick_condition(timeout=30.0)
+        if not cam_ready:
+            self.get_logger().warn('⚠️ Pick condition not met — proceeding with best effort')
 
-        # Step 2: ROS1-style arm_joint1 compensation based on pixel position
-        # ROS1 adjusts j1 to center the gripper on the cube using wrist camera.
-        # Linear mapping: pixel_x=320 → j1=90° (URDF 0), pixel_x=343.5 → j1=95° (URDF 0.087)
-        self._compensate_arm_joint1_for_cube_center()
-
-        # Step 3: Precise TF-based centering (arm is at REACH_DOWN).
-        # The FK model used during APPROACH is approximate; this step reads the
-        # actual finger-centre TF and cube TF to correct both forward and lateral
-        # offset in a closed loop until the gripper is centred on the cube.
-        self._tf_center_gripper_on_cube()
-
-        # Step 4: Simple forward distance check (arm already at REACH_DOWN)
-        # Do NOT rotate — the camera-guided approach already aligned laterally.
-        # Only correct forward distance to ensure gripper is at the right depth.
-        self._forward_distance_check()
-
-        # Step 3: Final camera check — if cube is still centered, trust it
-        self.get_logger().warn('═══════ FINAL CAMERA CHECK ═══════')
-        cam_ok = self._quick_camera_check(timeout=5.0)
-        if cam_ok:
-            self.get_logger().warn('  ✅ Camera confirms cube centered in gripper view')
+        # Read final pixel position for joint1 computation
+        pixel_x, pixel_y = self._get_cube_pixel()
+        if pixel_x is not None:
+            # Manufacturer linear mapping: [320, 90] → [343.5, 95] in degrees
+            # pos1_deg = 0.2128 * pixel_x + 21.91
+            pos1_deg = 0.2128 * pixel_x + 21.91
+            j1_rad = (pos1_deg - 90.0) * math.pi / 180.0
+            self.get_logger().warn(
+                f'  Pick pixel=({pixel_x:.0f},{pixel_y:.0f}) → j1={pos1_deg:.1f}° ({j1_rad:.3f} rad)')
         else:
-            self.get_logger().warn('  ⚠️ Camera check failed — proceeding anyway')
+            j1_rad = 0.0
+            self.get_logger().warn('  No pixel data — using j1=0')
 
-        # Step 4: GRASP (ROS1: close gripper, wait, lift)
-        self.get_logger().info('═══════ GRIPPER CLOSE & VERIFY ═══════')
+        # Manufacturer pick pose in degrees: [pos1, 7, 60, 38, 90]
+        # URDF radians: (deg-90)*π/180
+        # j1=pos1→(pos1-90)*π/180, j2=(7-90)*π/180=-1.449, j3=(60-90)*π/180=-0.524
+        # j4=(38-90)*π/180=-0.908, j5=(90-90)*π/180=0
+        pick_pose = [j1_rad, -1.449, -0.524, -0.908, 0.0]
 
-        # ROS1 closes gripper then lifts - following same pattern
-        MAX_GRASP_ATTEMPTS = 2
-        grasped = False
-        for attempt in range(1, MAX_GRASP_ATTEMPTS + 1):
-            self.get_logger().info(f'  Grasp attempt {attempt}/{MAX_GRASP_ATTEMPTS}')
+        # ── Manufacturer arm_gripper sequence ──
+        # Step 1: Move to pick position with gripper OPEN (8s in manufacturer)
+        self.get_logger().info('  [MFR] Moving to pick pose with gripper OPEN...')
+        self._gripper_open()
+        self._sleep_sim(0.5)
+        self._move_arm(pick_pose, 'mfr_pick_pose', duration_sec=3.0)
+        self._sleep_sim(1.0)
+
+        # Step 2: Open gripper wider (manufacturer: id=6, angle=150)
+        # GRIPPER_OPEN=-1.54 is already open; ensure fully open
+        self._gripper_open()
+        self._sleep_sim(0.5)
+
+        # Step 3: Lower arm — joint2 down (manufacturer: id=2, angle=60, 1s)
+        # j2=60° → URDF: (60-90)*π/180 = -0.524
+        self.get_logger().info('  [MFR] Lowering arm (joint2 down)...')
+        lower_pose = list(pick_pose)
+        lower_pose[1] = -0.524  # j2 = 60° in URDF
+        self._move_arm(lower_pose, 'mfr_lower_j2', duration_sec=1.5)
+        self._sleep_sim(0.5)
+
+        # Step 4: Further lower — joint1 to neutral (manufacturer: id=1, angle=0, 1s)
+        # j1=0° → URDF: (0-90)*π/180 = -1.571
+        self.get_logger().info('  [MFR] Further lowering (joint1 to neutral)...')
+        lower_pose[0] = -1.571  # j1 = 0° in URDF
+        self._move_arm(lower_pose, 'mfr_lower_j1', duration_sec=1.5)
+        self._sleep_sim(0.5)
+
+        # Step 5: Close gripper to grip (manufacturer: joints[5]=140 → ~4.5cm gap)
+        self.get_logger().info('  [MFR] Closing gripper to grip...')
+        self._gripper_close()
+        self._sleep_sim(1.5)
+
+        # Step 6: Lift to CARRY pose
+        self.get_logger().info('  [MFR] Lifting with cube...')
+        self._move_arm(CARRY, 'mfr_lift', duration_sec=2.0)
+        self._sleep_sim(0.5)
+
+        # Verify grasp
+        if self._cube_is_lifted():
+            self.get_logger().info('✅ GRASP CONFIRMED - cube lifted off the ground')
+            grasped = True
+        else:
+            self.get_logger().warn('⚠️ Grasp verification failed — retrying once')
+            # Retry: open, re-lower, close, lift
+            self._gripper_open()
+            self._sleep_sim(0.5)
+            self._move_arm(pick_pose, 'mfr_retry_pose', duration_sec=1.5)
+            self._sleep_sim(0.5)
             self._gripper_close()
-            self._sleep_sim(2.5)  # wait for gripper to close and settle
-
-            # Lift to CARRY pose — slower for secure grip
-            self.get_logger().info('  Lifting...')
-            self._move_arm(CARRY, 'lift_carry', duration_sec=3.0)
-            time.sleep(0.5)
-
-            if self._cube_is_lifted():
-                grasped = True
-                self.get_logger().info('✅ GRASP CONFIRMED - cube lifted off the ground')
-                break
-
-            self.get_logger().warn(f'⚠️ Grasp attempt {attempt} failed - retrying')
-            if attempt < MAX_GRASP_ATTEMPTS:
-                self._gripper_open()
-                self._sleep_sim(1.0)
-                self._move_arm(REACH_DOWN, 'reach_down_retry', duration_sec=1.0)
-                time.sleep(0.5)
+            self._sleep_sim(1.5)
+            self._move_arm(CARRY, 'mfr_retry_lift', duration_sec=2.0)
+            self._sleep_sim(0.5)
+            grasped = self._cube_is_lifted()
+            if grasped:
+                self.get_logger().info('✅ GRASP CONFIRMED on retry')
+            else:
+                self.get_logger().error('❌ PICK FAILED after retry')
 
         if not grasped:
             self.get_logger().error(
-                '❌ PICK FAILED - cube not grasped after all attempts. Aborting '
-                'BEFORE place so the robot does not drop an empty gripper.')
+                '❌ PICK FAILED - cube not grasped. Aborting.')
             self._gripper_open()
             self._sleep_sim(1.0)
             self._move_arm(HOME, 'fold_home_failed', duration_sec=2.0)
-            # FIX: abort — do NOT fall through to TRANSPORT with empty gripper.
             return False
 
         # ── STATE: TRANSPORT ────────────────────────────────────────
@@ -1053,6 +1078,91 @@ class VisionPickPlace(Node):
             time.sleep(0.15)
 
         self.get_logger().warn('  ⚠️ Forward check finished')
+
+    def _wait_for_pick_condition(self, timeout=30.0):
+        """Wait until the cube meets the manufacturer pick condition.
+
+        Manufacturer (ROS1) condition from autopilot_main.py Wrecker():
+          abs(pixel_x - 320) < 10 AND pixel_y > 440
+
+        This means the cube is centered horizontally and close enough vertically
+        (near the bottom of the image = physically close to the gripper).
+
+        Returns True if condition met, False if timeout.
+        """
+        if not CV_AVAILABLE or self._bridge is None:
+            self.get_logger().warn('  _wait_for_pick_condition: cv_bridge unavailable')
+            return False
+
+        self.get_logger().warn('═══════ WAITING FOR PICK CONDITION ═══════')
+        self.get_logger().warn('  Target: abs(pixel_x - 320) < 10 AND pixel_y > 440')
+
+        t0 = time.monotonic()
+        last_log = 0.0
+        consecutive_good = 0
+
+        while time.monotonic() - t0 < timeout:
+            rclpy.spin_once(self, timeout_sec=0.05)
+
+            if self._wrist_image is None:
+                time.sleep(0.05)
+                continue
+
+            try:
+                hsv = cv2.cvtColor(self._wrist_image, cv2.COLOR_BGR2HSV)
+                mask = cv2.inRange(hsv, BLUE_LOWER, BLUE_UPPER)
+                contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                large = [c for c in contours if cv2.contourArea(c) >= VISION_MIN_AREA]
+                if not large:
+                    consecutive_good = 0
+                    continue
+
+                largest = max(large, key=cv2.contourArea)
+                x, y, w, h = cv2.boundingRect(largest)
+                px = x + w // 2
+                py = y + h // 2
+
+                if time.monotonic() - last_log > 1.0:
+                    self.get_logger().info(
+                        f'  cube_pixel=({px},{py})  '
+                        f'cx_err={px - 320}  '
+                        f'py_ok={py > 440}')
+                    last_log = time.monotonic()
+
+                if abs(px - 320) < 10 and py > 440:
+                    consecutive_good += 1
+                    if consecutive_good >= 3:
+                        self.get_logger().warn(
+                            f'  ✅ PICK CONDITION MET: pixel=({px},{py})')
+                        return True
+                else:
+                    consecutive_good = 0
+
+            except Exception:
+                consecutive_good = 0
+
+        self.get_logger().warn(f'  ⚠️ Pick condition timeout after {timeout}s')
+        return False
+
+    def _get_cube_pixel(self):
+        """Return the latest (pixel_x, pixel_y) of the blue cube in the wrist camera.
+
+        Returns (None, None) if no cube detected.
+        """
+        if not CV_AVAILABLE or self._bridge is None or self._wrist_image is None:
+            return None, None
+        try:
+            hsv = cv2.cvtColor(self._wrist_image, cv2.COLOR_BGR2HSV)
+            mask = cv2.inRange(hsv, BLUE_LOWER, BLUE_UPPER)
+            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            large = [c for c in contours if cv2.contourArea(c) >= VISION_MIN_AREA]
+            if not large:
+                return None, None
+            largest = max(large, key=cv2.contourArea)
+            x, y, w, h = cv2.boundingRect(largest)
+            return x + w // 2, y + h // 2
+        except Exception:
+            return None, None
 
     def _quick_camera_check(self, timeout=5.0):
         """Quick check: is the blue cube roughly centered in the wrist camera?
