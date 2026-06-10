@@ -442,10 +442,18 @@ class VisionPickPlace(Node):
             self.get_logger().info('✅ GRASP CONFIRMED')
             grasped = True
         else:
-            self.get_logger().warn('⚠️ Grasp failed — retrying once')
+            self.get_logger().warn('⚠️ Grasp failed — retrying with fresh pixel read')
+            # Re-read pixel position before retry (cube may have shifted)
+            pixel_x2, pixel_y2 = self._get_cube_pixel()
+            if pixel_x2 is not None:
+                pos1_deg2 = 0.2128 * pixel_x2 + 21.91
+                j1_rad2 = (pos1_deg2 - 90.0) * math.pi / 180.0
+                self.get_logger().warn(
+                    f'  Retry pixel=({pixel_x2:.0f},{pixel_y2:.0f}) → j1={pos1_deg2:.1f}°')
+                pick_approach[0] = j1_rad2
             self._gripper_open()
             self._sleep_sim(0.5)
-            self._move_arm(pick_approach, 'mfr_retry', duration_sec=1.5)
+            self._move_arm(pick_approach, 'mfr_retry_approach', duration_sec=1.5)
             self._sleep_sim(0.5)
             self._gripper_close()
             self._sleep_sim(1.5)
