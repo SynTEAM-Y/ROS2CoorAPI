@@ -304,12 +304,11 @@ class VisionPickPlace(Node):
     def run_autopilot(self):
         """Manufacturer-style visual pick-and-place.
 
-        Simple pipeline matching ROS1 autopilot_main.py:
-          1. IDLE: Move arm to observe pose
-          2. DETECT: Wait for camera to see cube
-          3. NAVIGATE: Drive toward cube using pixel PID (no TF)
-          4. PICK: When pixel condition met, execute manufacturer arm sequence
-          5. TRANSPORT: Drive to drop zone, place cube
+        Key insight from ROS1 autopilot_main.py:
+        - Arm stays in HOME pose during navigation (wrist camera looks down)
+        - Front camera detects cube, robot drives toward it
+        - Wrist camera used ONLY for final pick alignment (pixel condition)
+        - Pick sequence: approach → lower → grip → lift
         """
         self.get_logger().info('=' * 60)
         self.get_logger().info('STARTING MANUFACTURER-STYLE VISION PICK-AND-PLACE')
@@ -320,7 +319,7 @@ class VisionPickPlace(Node):
 
         # ── STATE: IDLE ─────────────────────────────────────────────
         self.state = self.STATE_IDLE
-        self.get_logger().info('[STATE] IDLE: Moving arm to observe pose')
+        self.get_logger().info('[STATE] IDLE: Moving arm to home pose')
         self._gripper_open()
         self._sleep_sim(0.5)
         self._move_arm(MFR_HOME, 'mfr_home', duration_sec=2.0)
@@ -352,18 +351,49 @@ class VisionPickPlace(Node):
             f'[STATE] DETECT: Cube at ({self._object_pose_map.pose.position.x:.2f}, '
             f'{self._object_pose_map.pose.position.y:.2f})')
 
-        # ── STATE: NAVIGATE (Pixel PID drive to cube) ───────────────
+        # ── STATE: NAVIGATE (TF-based drive to cube) ────────────────
         self.state = self.STATE_NAVIGATE
-        self.get_logger().info('[STATE] NAVIGATE: Driving to cube using pixel PID')
+        self.get_logger().info('[STATE] NAVIGATE: Driving to cube using TF')
 
-        # Fold arm for driving (manufacturer pre-pick pose)
-        self._move_arm(MFR_PRE_PICK, 'mfr_pre_pick', duration_sec=2.0)
-        time.sleep(0.2)
+        # Keep arm in HOME during driving (manufacturer approach)
+        # Wrist camera looks down at workspace for cube detection
 
-        # Drive toward cube using pixel-based PID (manufacturer approach)
-        nav_ok = self._pixel_pid_navigate(timeout=60.0)
-        if not nav_ok:
-            self.get_logger().warn('⚠️ Navigation timed out — proceeding anyway')
+        # Get cube position from GT TF
+        cube_x, cube_y = None, None
+        for _ in range(20):
+            rclpy.spin_once(self, timeout_sec=0.05)
+            try:
+                t = self._tf_buffer.lookup_transform(
+                    'odom', 'test_block', Time(), Duration(seconds=0.2))
+                cube_x = t.transform.translation.x
+                cube_y = t.transform.translation.y
+                break
+            except Exception:
+                pass
+
+        if cube_x is None:
+            cube_x = self._object_pose_map.pose.position.x
+            cube_y = self._object_pose_map.pose.position.y
+
+        # Compute stop distance: we want the gripper center to land on the cube
+        # when the arm is at pick pose. The gripper reach at pick pose is ~0.25m.
+        gripper_reach = 0.25  # approximate reach at pick pose
+        stop_dist = gripper_reach + 0.05  # 5cm extra margin
+
+        self.get_logger().info(
+            f'  Target cube=({cube_x:.2f},{cube_y:.2f})  stop_dist={stop_dist:.2f}m')
+
+        # Drive to cube with heading alignment
+        self._drive_to_face_cube(cube_x, cube_y, stop_dist=stop_dist, timeout=45.0)
+
+        # ── STATE: APPROACH (Wrist camera fine alignment) ───────────
+        self.state = self.STATE_APPROACH
+        self.get_logger().info('[STATE] APPROACH: Wrist camera fine alignment')
+
+        # Check if wrist camera sees the cube
+        align_ok = self._wrist_camera_align(timeout=20.0)
+        if not align_ok:
+            self.get_logger().warn('⚠️ Wrist camera alignment incomplete — proceeding anyway')
 
         # ── STATE: PICK (Manufacturer arm sequence) ─────────────────
         self.state = self.STATE_PICK
@@ -383,11 +413,8 @@ class VisionPickPlace(Node):
 
         # Manufacturer pick approach pose: [pos1, 7°, 60°, 38°, 90°]
         # URDF radians: (deg-90)*π/180
-        # NOTE: j4 adjusted from 38°→45° for simulation URDF geometry.
-        # The real robot uses j4=38°, but the sim URDF has arm_joint5 rpy=π/2
-        # and grip_joint rpy=-π/2 which shifts the gripper orientation.
-        # j4=45° (URDF -0.785) makes the gripper fingers point straight down.
-        pick_approach = [j1_rad, -1.449, -0.524, -0.785, 0.0]
+        # Using manufacturer j4=38° (URDF -0.908) — same URDF geometry
+        pick_approach = [j1_rad, -1.449, -0.524, -0.908, 0.0]
 
         # Step 1: Move to pick approach pose with gripper OPEN
         self.get_logger().info('  [MFR] Pick approach pose + gripper OPEN')
@@ -1430,6 +1457,129 @@ class VisionPickPlace(Node):
         except Exception as e:
             self.get_logger().warn(f'_cube_in_odom: TF lookup failed: {e}')
             return None, None
+
+    def _drive_to_face_cube(self, target_x, target_y, stop_dist=0.30, timeout=45.0):
+        """Drive toward cube and stop facing it.
+
+        Uses TF ground truth for reliable positioning. Stops at stop_dist
+        from the cube with the robot heading aligned toward it.
+        """
+        self.get_logger().warn('═══════ DRIVE TO FACE CUBE ═══════')
+
+        deadline = time.monotonic() + timeout
+        last_log = 0.0
+
+        while time.monotonic() < deadline:
+            rclpy.spin_once(self, timeout_sec=0.02)
+
+            # Refresh cube TF
+            try:
+                t = self._tf_buffer.lookup_transform(
+                    'odom', 'test_block', Time(), Duration(seconds=0.1))
+                target_x = t.transform.translation.x
+                target_y = t.transform.translation.y
+            except Exception:
+                pass
+
+            dx = target_x - self._odom_x
+            dy = target_y - self._odom_y
+            dist = math.hypot(dx, dy)
+
+            if dist <= stop_dist:
+                self.get_logger().warn(
+                    f'  ✅ Arrived: dist={dist:.2f}m (stop={stop_dist:.2f}m)')
+                break
+
+            target_yaw = math.atan2(dy, dx)
+            yaw_err = self._normalize_angle(target_yaw - self._odom_yaw)
+
+            twist = Twist()
+
+            # If heading is off, rotate in place first
+            if abs(yaw_err) > 0.4:
+                twist.linear.x = 0.0
+                twist.angular.z = max(-0.8, min(0.8, yaw_err * 2.0))
+            else:
+                # Drive forward with heading correction
+                twist.linear.x = max(0.1, min(0.4, (dist - stop_dist) * 1.0))
+                twist.angular.z = max(-0.6, min(0.6, yaw_err * 1.5))
+
+            self._publish_cmd_vel(twist)
+
+            if time.monotonic() - last_log > 0.5:
+                self.get_logger().info(
+                    f'  dist={dist:.2f}m  yaw_err={math.degrees(yaw_err):+.0f}°  '
+                    f'cmd_vel=({twist.linear.x:.2f}, {twist.angular.z:.2f})')
+                last_log = time.monotonic()
+
+            time.sleep(0.02)
+
+        # Full stop
+        self._publish_cmd_vel(Twist())
+        for _ in range(5):
+            self._publish_cmd_vel(Twist())
+            rclpy.spin_once(self, timeout_sec=0.02)
+        time.sleep(0.2)
+
+    def _wrist_camera_align(self, timeout=20.0):
+        """Fine-tune robot heading using wrist camera pixel position.
+
+        Rotates the robot in place until the cube is centered in the wrist
+        camera (abs(pixel_x - 320) < 15). This ensures the gripper will be
+        laterally aligned with the cube when the pick sequence executes.
+        """
+        if not CV_AVAILABLE or self._bridge is None:
+            self.get_logger().warn('  _wrist_camera_align: cv_bridge unavailable')
+            return False
+
+        self.get_logger().warn('═══════ WRIST CAMERA ALIGNMENT ═══════')
+        self.get_logger().warn('  Target: abs(pixel_x - 320) < 15')
+
+        t0 = time.monotonic()
+        last_log = 0.0
+        consecutive_good = 0
+
+        while time.monotonic() - t0 < timeout:
+            rclpy.spin_once(self, timeout_sec=0.05)
+
+            pixel_x, pixel_y = self._get_cube_pixel()
+            if pixel_x is None:
+                # No cube in wrist view — rotate slowly to search
+                twist = Twist()
+                twist.angular.z = 0.2
+                self._publish_cmd_vel(twist)
+                if time.monotonic() - last_log > 2.0:
+                    self.get_logger().info('  No cube in wrist view — searching...')
+                    last_log = time.monotonic()
+                continue
+
+            cx_err = pixel_x - 320
+
+            if time.monotonic() - last_log > 0.5:
+                self.get_logger().info(
+                    f'  pixel=({pixel_x},{pixel_y})  cx_err={cx_err}  '
+                    f'yaw={math.degrees(self._odom_yaw):.0f}°')
+                last_log = time.monotonic()
+
+            if abs(cx_err) < 15:
+                consecutive_good += 1
+                if consecutive_good >= 3:
+                    self.get_logger().warn(
+                        f'  ✅ Cube centered: pixel_x={pixel_x}')
+                    self._publish_cmd_vel(Twist())
+                    return True
+            else:
+                consecutive_good = 0
+
+            # Rotate toward cube center
+            twist = Twist()
+            twist.angular.z = max(-0.4, min(0.4, -cx_err / 100.0))
+            self._publish_cmd_vel(twist)
+            time.sleep(0.05)
+
+        self.get_logger().warn(f'  ⚠️ Wrist camera alignment timeout')
+        self._publish_cmd_vel(Twist())
+        return False
 
     def _pixel_pid_navigate(self, timeout=60.0):
         """Drive toward cube using pixel-based PID (manufacturer approach).
