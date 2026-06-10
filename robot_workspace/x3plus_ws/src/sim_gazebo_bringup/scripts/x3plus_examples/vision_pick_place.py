@@ -437,6 +437,11 @@ class VisionPickPlace(Node):
         self._move_arm(ARM_APPROACH, 'approach_pose', duration_sec=1.0)
         time.sleep(0.1)
 
+        # Explicitly yaw-align toward the cube BEFORE visual servoing.
+        # After NAVIGATE the robot may be facing away from the cube (e.g. 180°
+        # off), which caused the servo loop to lose TF mid-turn and abort.
+        self._yaw_align_to_cube(timeout=15.0)
+
         camera_ok = self._camera_guided_approach()
         if camera_ok:
             self.get_logger().warn('✅ Camera-guided alignment complete.')
@@ -1337,6 +1342,81 @@ class VisionPickPlace(Node):
         except Exception as e:
             self.get_logger().warn(f'_cube_in_odom: TF lookup failed: {e}')
             return None, None
+
+    def _yaw_align_to_cube(self, timeout=15.0):
+        """Rotate the base in place until it faces the cube (GT TF).
+
+        Called at the start of APPROACH to eliminate large heading errors
+        (e.g. 180°) before the visual servo loop begins.  Without this,
+        the servo loop would lose TF mid-turn and abort with the robot
+        facing the wrong direction.
+        """
+        self.get_logger().warn('═══════ PRE-APPROACH YAW ALIGNMENT ═══════')
+
+        # Get cube position from GT TF
+        cube_x, cube_y = None, None
+        for _ in range(20):
+            rclpy.spin_once(self, timeout_sec=0.05)
+            try:
+                t = self._tf_buffer.lookup_transform(
+                    'odom', 'test_block', Time(), Duration(seconds=0.2))
+                cube_x = t.transform.translation.x
+                cube_y = t.transform.translation.y
+                break
+            except Exception:
+                pass
+
+        if cube_x is None:
+            self.get_logger().warn('  Cube TF unavailable — skipping yaw alignment')
+            return
+
+        self.get_logger().warn(
+            f'  cube=({cube_x:.3f},{cube_y:.3f})  '
+            f'robot=({self._odom_x:.3f},{self._odom_y:.3f})  '
+            f'yaw={math.degrees(self._odom_yaw):.0f}°')
+
+        t0 = time.monotonic()
+        last_log = 0.0
+        while time.monotonic() - t0 < timeout:
+            rclpy.spin_once(self, timeout_sec=0.02)
+
+            # Refresh cube TF periodically
+            try:
+                t = self._tf_buffer.lookup_transform(
+                    'odom', 'test_block', Time(), Duration(seconds=0.1))
+                cube_x = t.transform.translation.x
+                cube_y = t.transform.translation.y
+            except Exception:
+                pass
+
+            dx = cube_x - self._odom_x
+            dy = cube_y - self._odom_y
+            target_yaw = math.atan2(dy, dx)
+            yaw_err = self._normalize_angle(target_yaw - self._odom_yaw)
+
+            if time.monotonic() - last_log > 0.5:
+                self.get_logger().info(
+                    f'  yaw_align: target_yaw={math.degrees(target_yaw):.0f}°  '
+                    f'current_yaw={math.degrees(self._odom_yaw):.0f}°  '
+                    f'err={math.degrees(yaw_err):+.1f}°')
+                last_log = time.monotonic()
+
+            if abs(yaw_err) < math.radians(5.0):
+                self.get_logger().warn(
+                    f'  ✅ Yaw aligned: err={math.degrees(yaw_err):+.1f}°')
+                break
+
+            twist = Twist()
+            twist.angular.z = max(-0.8, min(0.8, yaw_err * 2.5))
+            self._publish_cmd_vel(twist)
+            time.sleep(0.02)
+
+        # Full stop
+        self._publish_cmd_vel(Twist())
+        for _ in range(5):
+            self._publish_cmd_vel(Twist())
+            rclpy.spin_once(self, timeout_sec=0.02)
+        time.sleep(0.2)
 
     def _camera_guided_approach(self):
         """Closed-loop approach: align the gripper centre with the cube.
