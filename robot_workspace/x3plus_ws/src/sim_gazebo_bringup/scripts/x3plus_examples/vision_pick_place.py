@@ -383,7 +383,11 @@ class VisionPickPlace(Node):
 
         # Manufacturer pick approach pose: [pos1, 7°, 60°, 38°, 90°]
         # URDF radians: (deg-90)*π/180
-        pick_approach = [j1_rad, -1.449, -0.524, -0.908, 0.0]
+        # NOTE: j4 adjusted from 38°→45° for simulation URDF geometry.
+        # The real robot uses j4=38°, but the sim URDF has arm_joint5 rpy=π/2
+        # and grip_joint rpy=-π/2 which shifts the gripper orientation.
+        # j4=45° (URDF -0.785) makes the gripper fingers point straight down.
+        pick_approach = [j1_rad, -1.449, -0.524, -0.785, 0.0]
 
         # Step 1: Move to pick approach pose with gripper OPEN
         self.get_logger().info('  [MFR] Pick approach pose + gripper OPEN')
@@ -400,7 +404,8 @@ class VisionPickPlace(Node):
         self._sleep_sim(0.5)
 
         # Step 3: Further lower — j1 to neutral 0° (manufacturer: id=1, angle=0)
-        self.get_logger().info('  [MFR] Further lower (j1→0° neutral)')
+        # This is the actual pick grip pose: gripper vertical over cube
+        self.get_logger().info('  [MFR] Further lower (j1→0° neutral) — gripper vertical')
         lower_pose[0] = -1.571  # j1 = 0° URDF
         self._move_arm(lower_pose, 'mfr_lower_j1', duration_sec=1.5)
         self._sleep_sim(0.5)
