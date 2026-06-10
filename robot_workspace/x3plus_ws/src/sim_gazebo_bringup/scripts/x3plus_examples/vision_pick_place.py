@@ -386,63 +386,66 @@ class VisionPickPlace(Node):
         # Drive to cube with heading alignment
         self._drive_to_face_cube(cube_x, cube_y, stop_dist=stop_dist, timeout=45.0)
 
-        # ── STATE: APPROACH (Wrist camera fine alignment) ───────────
-        self.state = self.STATE_APPROACH
-        self.get_logger().info('[STATE] APPROACH: Wrist camera fine alignment')
-
-        # Check if wrist camera sees the cube
-        align_ok = self._wrist_camera_align(timeout=20.0)
-        if not align_ok:
-            self.get_logger().warn('⚠️ Wrist camera alignment incomplete — proceeding anyway')
-
         # ── STATE: PICK (Manufacturer arm sequence) ─────────────────
         self.state = self.STATE_PICK
         self.get_logger().info('[STATE] PICK: Executing manufacturer arm sequence')
 
-        # Read final pixel position for joint1 computation
-        pixel_x, pixel_y = self._get_cube_pixel()
-        if pixel_x is not None:
-            # Manufacturer linear mapping: [320, 90] → [343.5, 95] in degrees
-            pos1_deg = 0.2128 * pixel_x + 21.91
-            j1_rad = (pos1_deg - 90.0) * math.pi / 180.0
-            self.get_logger().warn(
-                f'  Pick pixel=({pixel_x:.0f},{pixel_y:.0f}) → j1={pos1_deg:.1f}°')
-        else:
-            j1_rad = 0.0
-            self.get_logger().warn('  No pixel data — using j1=0')
-
-        # Manufacturer pick approach pose: [pos1, 7°, 60°, 38°, 90°]
-        # URDF radians: (deg-90)*π/180
-        # Using manufacturer j4=38° (URDF -0.908) — same URDF geometry
-        pick_approach = [j1_rad, -1.449, -0.524, -0.908, 0.0]
-
         # Step 1: Move to pick approach pose with gripper OPEN
+        # This lowers the arm so the wrist camera can see the workspace
         self.get_logger().info('  [MFR] Pick approach pose + gripper OPEN')
         self._gripper_open()
         self._sleep_sim(0.5)
+
+        # Read pixel for j1 computation
+        pixel_x, pixel_y = self._get_cube_pixel()
+        if pixel_x is not None:
+            pos1_deg = 0.2128 * pixel_x + 21.91
+            j1_rad = (pos1_deg - 90.0) * math.pi / 180.0
+            self.get_logger().warn(
+                f'  Initial pixel=({pixel_x:.0f},{pixel_y:.0f}) → j1={pos1_deg:.1f}°')
+        else:
+            j1_rad = 0.0
+            self.get_logger().warn('  No pixel data yet — using j1=0')
+
+        pick_approach = [j1_rad, -1.449, -0.524, -0.908, 0.0]
         self._move_arm(pick_approach, 'mfr_pick_approach', duration_sec=3.0)
         self._sleep_sim(1.0)
 
-        # Step 2: Lower arm — j2 down to 60° (manufacturer: id=2, angle=60)
+        # Step 2: Wrist camera fine alignment — rotate robot until cube centered
+        # Now that arm is lowered, wrist camera can see the workspace
+        self.get_logger().info('  [MFR] Wrist camera fine alignment')
+        self._wrist_camera_align(timeout=15.0)
+
+        # Re-read pixel after alignment for updated j1
+        pixel_x, pixel_y = self._get_cube_pixel()
+        if pixel_x is not None:
+            pos1_deg = 0.2128 * pixel_x + 21.91
+            j1_rad = (pos1_deg - 90.0) * math.pi / 180.0
+            self.get_logger().warn(
+                f'  Aligned pixel=({pixel_x:.0f},{pixel_y:.0f}) → j1={pos1_deg:.1f}°')
+            # Update pick_approach with new j1
+            pick_approach[0] = j1_rad
+
+        # Step 3: Lower arm — j2 down to 60° (manufacturer: id=2, angle=60)
         self.get_logger().info('  [MFR] Lower arm (j2→60°)')
         lower_pose = list(pick_approach)
         lower_pose[1] = -0.524  # j2 = 60° URDF
         self._move_arm(lower_pose, 'mfr_lower_j2', duration_sec=1.5)
         self._sleep_sim(0.5)
 
-        # Step 3: Further lower — j1 to neutral 0° (manufacturer: id=1, angle=0)
+        # Step 4: Further lower — j1 to neutral 0° (manufacturer: id=1, angle=0)
         # This is the actual pick grip pose: gripper vertical over cube
         self.get_logger().info('  [MFR] Further lower (j1→0° neutral) — gripper vertical')
         lower_pose[0] = -1.571  # j1 = 0° URDF
         self._move_arm(lower_pose, 'mfr_lower_j1', duration_sec=1.5)
         self._sleep_sim(0.5)
 
-        # Step 4: Close gripper (manufacturer: joints[5]=140 → URDF 0.0)
+        # Step 5: Close gripper (manufacturer: joints[5]=140 → URDF 0.0)
         self.get_logger().info('  [MFR] Close gripper')
         self._gripper_close()
         self._sleep_sim(1.5)
 
-        # Step 5: Lift to CARRY pose
+        # Step 6: Lift to CARRY pose
         self.get_logger().info('  [MFR] Lift with cube')
         self._move_arm(MFR_CARRY, 'mfr_lift', duration_sec=2.0)
         self._sleep_sim(0.5)
