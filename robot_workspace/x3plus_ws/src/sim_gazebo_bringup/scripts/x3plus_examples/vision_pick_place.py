@@ -466,7 +466,13 @@ class VisionPickPlace(Node):
         # Linear mapping: pixel_x=320 → j1=90° (URDF 0), pixel_x=343.5 → j1=95° (URDF 0.087)
         self._compensate_arm_joint1_for_cube_center()
 
-        # Step 3: Simple forward distance check (arm already at REACH_DOWN)
+        # Step 3: Precise TF-based centering (arm is at REACH_DOWN).
+        # The FK model used during APPROACH is approximate; this step reads the
+        # actual finger-centre TF and cube TF to correct both forward and lateral
+        # offset in a closed loop until the gripper is centred on the cube.
+        self._tf_center_gripper_on_cube()
+
+        # Step 4: Simple forward distance check (arm already at REACH_DOWN)
         # Do NOT rotate — the camera-guided approach already aligned laterally.
         # Only correct forward distance to ensure gripper is at the right depth.
         self._forward_distance_check()
@@ -899,6 +905,97 @@ class VisionPickPlace(Node):
 
         except Exception as e:
             self.get_logger().warn(f'  j1 compensation error: {e}')
+
+    def _tf_center_gripper_on_cube(self, timeout=20.0):
+        """Closed-loop TF-based centering: align gripper centre onto cube.
+
+        Called after the arm is at REACH_DOWN.  Reads the actual finger-centre
+        TF (rlink2 + llink2 midpoint) and the cube TF (test_block), computes
+        forward + lateral offset in the robot frame, and drives the base to
+        eliminate both.  Runs until convergence or timeout.
+        """
+        self.get_logger().warn('═══════ TF-BASED GRIPPER CENTERING ═══════')
+
+        t0 = time.monotonic()
+        last_log = 0.0
+        converge_count = 0
+        required_converge = 3  # consecutive good reads
+
+        while time.monotonic() - t0 < timeout:
+            rclpy.spin_once(self, timeout_sec=0.02)
+
+            # Cube TF
+            try:
+                tc = self._tf_buffer.lookup_transform(
+                    'odom', 'test_block', Time(), Duration(seconds=0.1))
+                cube_x = tc.transform.translation.x
+                cube_y = tc.transform.translation.y
+            except Exception:
+                self.get_logger().warn('  Cube TF unavailable — retrying')
+                time.sleep(0.1)
+                continue
+
+            # Finger centre TF
+            finger_x, finger_y, finger_src = self._get_finger_center_x()
+            if finger_src != 'finger_TF':
+                self.get_logger().warn(
+                    f'  Finger TF unavailable (src={finger_src}) — retrying')
+                time.sleep(0.1)
+                continue
+
+            # Finger world position (full 2D transform)
+            fw_x = (self._odom_x
+                    + finger_x * math.cos(self._odom_yaw)
+                    - finger_y * math.sin(self._odom_yaw))
+            fw_y = (self._odom_y
+                    + finger_x * math.sin(self._odom_yaw)
+                    + finger_y * math.cos(self._odom_yaw))
+
+            # Offset in robot frame
+            dx = cube_x - fw_x
+            dy = cube_y - fw_y
+            forward_err = dx * math.cos(self._odom_yaw) + dy * math.sin(self._odom_yaw)
+            lateral_err = -dx * math.sin(self._odom_yaw) + dy * math.cos(self._odom_yaw)
+
+            if time.monotonic() - last_log > 0.5:
+                self.get_logger().info(
+                    f'  centering: forward={forward_err*1000:+.1f}mm  '
+                    f'lateral={lateral_err*1000:+.1f}mm  '
+                    f'finger_world=({fw_x:.4f},{fw_y:.4f})  '
+                    f'cube=({cube_x:.4f},{cube_y:.4f})')
+                last_log = time.monotonic()
+
+            # Convergence check: within 5 mm forward and 3 mm lateral
+            if abs(forward_err) < 0.005 and abs(lateral_err) < 0.003:
+                converge_count += 1
+                if converge_count >= required_converge:
+                    self.get_logger().warn(
+                        f'  ✅ TF centering converged '
+                        f'(fwd={forward_err*1000:+.1f}mm, lat={lateral_err*1000:+.1f}mm)')
+                    break
+            else:
+                converge_count = 0
+
+            # Compute corrections
+            twist = Twist()
+            # Forward correction (proportional, clamped)
+            twist.linear.x = max(-0.10, min(0.10, forward_err * 1.5))
+            # Lateral correction via yaw (rotate toward cube)
+            if abs(lateral_err) > 0.003:
+                # Target yaw that would eliminate lateral offset
+                target_yaw = math.atan2(cube_y - self._odom_y, cube_x - self._odom_x)
+                yaw_err = self._normalize_angle(target_yaw - self._odom_yaw)
+                twist.angular.z = max(-0.4, min(0.4, yaw_err * 2.0))
+
+            self._publish_cmd_vel(twist)
+            time.sleep(0.05)
+
+        # Full stop
+        self._publish_cmd_vel(Twist())
+        for _ in range(5):
+            self._publish_cmd_vel(Twist())
+            rclpy.spin_once(self, timeout_sec=0.02)
+        time.sleep(0.2)
 
     def _forward_distance_check(self):
         """Check and correct forward distance only — no lateral rotation.
