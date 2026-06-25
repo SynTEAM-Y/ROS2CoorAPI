@@ -1,4 +1,4 @@
-# ROS2Coordination Project
+# ROS2Coordination API
 
 This repository contains the software stack for multi robot coordination using ROS 2.  
 It includes communication infrastructure, robot bringup, simulation tools, and research scenarios.  
