@@ -4,6 +4,7 @@ import math
 import rclpy
 from geometry_msgs.msg import Twist, TransformStamped
 from nav_msgs.msg import Odometry
+from sensor_msgs.msg import JointState
 from rclpy.node import Node
 from tf2_ros import TransformBroadcaster
 
@@ -33,6 +34,7 @@ class DiffDriveSimulator(Node):
 
         self.odom_publisher = self.create_publisher(Odometry, 'odom', 10)
         self.tf_broadcaster = TransformBroadcaster(self)
+        self.joint_state_publisher = self.create_publisher(JointState, 'joint_states', 10)
         self.create_subscription(Twist, 'cmd_vel', self.cmd_vel_callback, 10)
 
         self.last_time = self.get_clock().now()
@@ -81,6 +83,18 @@ class DiffDriveSimulator(Node):
         odom.twist.twist.linear.x = self.linear_velocity
         odom.twist.twist.angular.z = self.angular_velocity
         self.odom_publisher.publish(odom)
+
+        joint_state = JointState()
+        joint_state.header.stamp = now.to_msg()
+        joint_state.name = [
+            'front_left_wheel_joint', 'front_right_wheel_joint',
+            'back_left_wheel_joint', 'back_right_wheel_joint',
+            'arm_joint1', 'arm_joint2', 'arm_joint3', 'arm_joint4', 'arm_joint5',
+            'grip_joint', 'rlink_joint3', 'llink_joint1', 'llink_joint2', 'llink_joint3',
+            'rlink_joint1', 'rlink_joint2'
+        ]
+        joint_state.position = [0.0] * len(joint_state.name)
+        self.joint_state_publisher.publish(joint_state)
 
 
 def main():

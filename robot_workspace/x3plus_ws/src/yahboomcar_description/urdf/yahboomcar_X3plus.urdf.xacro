@@ -184,7 +184,7 @@
     </common_link>
     <revolute_joint name="grip_joint" parent="arm_link5" child="rlink1" xyz="-0.0035 -0.012625 -0.0685"
                     rpy="0 -${pi/2} 0" axisZ="1" lower="-${pi/2}" upper="0"/>
-    <common_link name="rlink2" material="Green" path="X3plus">
+    <link name="${ns}/rlink2">
         <inertial>
             <origin xyz="0.021158 0.0063295 -0.0030251" rpy="0 0 0"/>
             <mass value="0.0024469"/>
@@ -196,7 +196,36 @@
                     iyz="-3.8824E-10"
                     izz="6.6364E-07"/>
         </inertial>
-    </common_link>
+        <visual>
+            <geometry>
+                <mesh filename="package://yahboomcar_description/meshes/X3plus/visual/rlink2.STL"/>
+            </geometry>
+            <origin xyz="0 0 0" rpy="0 0 0"/>
+            <material name="Green"/>
+        </visual>
+        <collision>
+            <geometry>
+                <mesh filename="package://yahboomcar_description/meshes/X3plus/collision/rlink2.STL"/>
+            </geometry>
+            <origin xyz="0 0 0" rpy="0 0 0"/>
+            <surface>
+                <friction>
+                    <ode>
+                        <mu>100.0</mu>
+                        <mu2>100.0</mu2>
+                    </ode>
+                </friction>
+                <contact>
+                    <ode>
+                        <kp>100000.0</kp>
+                        <kd>50.0</kd>
+                        <max_vel>1.0</max_vel>
+                        <min_depth>0.001</min_depth>
+                    </ode>
+                </contact>
+            </surface>
+        </collision>
+    </link>
     <continuous_joint name="rlink_joint2" parent="rlink1" child="rlink2" xyz="0.03 -0.00075429 0" rpy="0 0 0" mimic="-1"/>
 
     <common_link name="rlink3" material="Green" path="X3plus">
@@ -229,14 +258,43 @@
     </common_link>
     <continuous_joint name="llink_joint1" parent="arm_link5" child="llink1" xyz="-0.0035 0.012375 -0.0685"
                       rpy="0 -${pi/2} 0" mimic="-1"/>
-    <common_link name="llink2" material="Green" path="X3plus">
+    <link name="${ns}/llink2">
         <inertial>
             <origin xyz="0.021159 -0.0063248 -0.0030251" rpy="0 0 0"/>
             <mass value="0.0024469"/>
             <inertia ixx="5.1826E-08" ixy="1.229E-07" ixz="-1.2979E-09" iyy="6.321E-07" iyz="3.8796E-10"
                      izz="6.6364E-07"/>
         </inertial>
-    </common_link>
+        <visual>
+            <geometry>
+                <mesh filename="package://yahboomcar_description/meshes/X3plus/visual/llink2.STL"/>
+            </geometry>
+            <origin xyz="0 0 0" rpy="0 0 0"/>
+            <material name="Green"/>
+        </visual>
+        <collision>
+            <geometry>
+                <mesh filename="package://yahboomcar_description/meshes/X3plus/collision/llink2.STL"/>
+            </geometry>
+            <origin xyz="0 0 0" rpy="0 0 0"/>
+            <surface>
+                <friction>
+                    <ode>
+                        <mu>100.0</mu>
+                        <mu2>100.0</mu2>
+                    </ode>
+                </friction>
+                <contact>
+                    <ode>
+                        <kp>100000.0</kp>
+                        <kd>50.0</kd>
+                        <max_vel>1.0</max_vel>
+                        <min_depth>0.001</min_depth>
+                    </ode>
+                </contact>
+            </surface>
+        </collision>
+    </link>
     <continuous_joint name="llink_joint2" parent="llink1" child="llink2" xyz="0.03 0.00065104 0" rpy="0 0 0"
                       mimic="1"/>
     <common_link name="llink3" material="Green" path="X3plus">

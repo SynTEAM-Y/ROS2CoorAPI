@@ -77,6 +77,25 @@ install(
   DESTINATION share/${PROJECT_NAME}/urdf
 )
 
+# Rewrite mesh URIs for the dedicated multi-robot URDF xacro
+file(READ
+  "${CMAKE_CURRENT_SOURCE_DIR}/scripts/yahboomcar_description/urdf/yahboomcar_X3plus_multi.urdf.xacro"
+  _XACRO_CONTENT_MULTI
+)
+string(REPLACE
+  "package://yahboomcar_description/meshes/"
+  "package://sim_gazebo_bringup/meshes/"
+  _XACRO_CONTENT_MULTI "${_XACRO_CONTENT_MULTI}"
+)
+file(WRITE
+  "${CMAKE_CURRENT_BINARY_DIR}/generated/urdf/yahboomcar_X3plus_multi.urdf.xacro"
+  "${_XACRO_CONTENT_MULTI}"
+)
+install(
+  FILES "${CMAKE_CURRENT_BINARY_DIR}/generated/urdf/yahboomcar_X3plus_multi.urdf.xacro"
+  DESTINATION share/${PROJECT_NAME}/urdf
+)
+
 # Install our Python nodes as ROS executables. They become runnable as:
 #   ros2 run sim_gazebo_bringup manual_control
 #   ros2 run sim_gazebo_bringup arm_controller
@@ -130,6 +149,21 @@ install(PROGRAMS scripts/x3plus_examples/sensor_visualizer.py
 install(PROGRAMS scripts/x3plus_examples/vision_pick_place.py
         DESTINATION lib/${PROJECT_NAME}
         RENAME vision_pick_place)
+install(PROGRAMS scripts/x3plus_examples/vision_autopilot_simple.py
+        DESTINATION lib/${PROJECT_NAME}
+        RENAME vision_autopilot_simple)
+install(PROGRAMS scripts/x3plus_examples/multi_robot_cube_sink_autopilot.py
+        DESTINATION lib/${PROJECT_NAME}
+        RENAME multi_robot_cube_sink_autopilot)
+install(PROGRAMS scripts/x3plus_examples/cmd_vel_relay.py
+        DESTINATION lib/${PROJECT_NAME}
+        RENAME cmd_vel_relay)
+install(PROGRAMS scripts/test_gripper_calibration.py
+        DESTINATION lib/${PROJECT_NAME}
+        RENAME test_gripper_calibration)
+install(PROGRAMS scripts/x3plus_examples/cube_attach_detach.py
+        DESTINATION lib/${PROJECT_NAME}
+        RENAME cube_attach_detach)
 
 # Run linting
 if(BUILD_TESTING)

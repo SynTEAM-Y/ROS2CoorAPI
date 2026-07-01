@@ -23,12 +23,12 @@
 
     <link name="base_link">
       <inertial>
-        <!-- 20 g — light enough for the gripper to lift securely. -->
-        <mass>0.02</mass>
+        <!-- 5 g — light enough for the gripper to lift securely. -->
+        <mass>0.020</mass>
         <inertia>
-          <ixx>3.33e-6</ixx>
-          <iyy>3.33e-6</iyy>
-          <izz>3.33e-6</izz>
+          <ixx>2.08e-7</ixx>
+          <iyy>2.08e-7</iyy>
+          <izz>2.08e-7</izz>
         </inertia>
       </inertial>
       <collision name="collision">

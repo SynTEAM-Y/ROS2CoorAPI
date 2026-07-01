@@ -1,1 +1,22 @@
-/home/othman/ROS2CoorAPI/robot_workspace/x3plus_ws/src/x3plus_gazebo_bringup/launch/x3plus_gazebo.launch.xml
+<launch>
+    <let name="urdf_path" 
+    value="$(find-pkg-share yahboomcar_description)/urdf/x3plus.urdf.xacro"/>
+    <let name="rviz_config_path" 
+    value="$(find-pkg-share yahboomcar_description)/rviz/x3plus.rviz"/>
+
+    <node pkg="robot_state_publisher" exec="robot_state_publisher" 
+        <param name="yahboomcar_description"
+         value="$(command 'xacro $(var urdf_path)')"/>
+    </node>
+
+    <include file="$(find-pkg-share ros_gz_sim)/launch/gz_sim.launch.py">
+        <arg name="gz_args" value="empty.sdf -r"/>
+    </include>
+
+    <node pkg="ros_gz_sim" exec="create" 
+        args:="-topic robot_description "/>
+
+    <node pkg="rviz2" exec="rviz2" output="screen"
+         args="-d $(var rviz_config_path)"/>
+
+</launch>
