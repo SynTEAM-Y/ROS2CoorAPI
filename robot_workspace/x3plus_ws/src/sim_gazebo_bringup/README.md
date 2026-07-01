@@ -142,6 +142,32 @@ ros2 launch sim_gazebo_bringup gazebo.launch.py use_sim_time:=false
 ros2 launch sim_gazebo_bringup gazebo.launch.py use_rviz:=false use_sim_time:=false
 ```
 
+### Option 4: Vision Autopilot (pick-and-place)
+
+This package ships two vision autopilots. They are siblings, not alternatives —
+pick the one that matches your scenario.
+
+```bash
+# A. Simple (manufacturer-style, recommended for first run)
+#    - No Nav2, no MoveIt, no object_detector
+#    - Gazebo PosePublisher provides ground-truth cube and pad positions
+#    - Wrist camera HSV handles only the last ~0.3 m of the pick
+ros2 launch sim_gazebo_bringup vision_autopilot_simple.launch.py world:=office
+
+# B. Full (Nav2 + object_detector + FollowJointTrajectory arm control)
+#    - Adds /detected_object_pose, Nav2, MoveIt
+#    - Camera is the primary source of cube position (not GPS)
+#    - Heavier; use when you want to test the full perception pipeline
+ros2 launch sim_gazebo_bringup vision_autopilot.launch.py world:=office
+```
+
+The simple launch (A) is what most users want for a first test. It depends
+on the `odom -> test_block` and `odom -> landing_pad` TFs being published,
+which in the simulation come from `gazebo_pose_tf_relay` reading the
+Gazebo PosePublisher plugin on each model SDF. To port to a real robot,
+replace those two relay nodes with a perception node that publishes the
+same TFs from camera + fiducials.
+
 ## Launch File Arguments
 
 ### gazebo.launch.py

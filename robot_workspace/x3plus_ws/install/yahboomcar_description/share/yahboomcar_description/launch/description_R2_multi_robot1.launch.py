@@ -1,1 +1,0 @@
-/home/othman/ROS2CoorAPI/robot_workspace/x3plus_ws/build/yahboomcar_description/launch/description_R2_multi_robot1.launch.py

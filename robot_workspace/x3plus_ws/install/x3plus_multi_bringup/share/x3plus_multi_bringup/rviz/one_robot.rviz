@@ -1,1 +1,36 @@
-/home/othman/ROS2CoorAPI/robot_workspace/x3plus_ws/build/x3plus_multi_bringup/rviz/one_robot.rviz
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+  - Class: rviz_common/Selection
+    Name: Selection
+  - Class: rviz_common/Views
+    Name: Views
+Visualization Manager:
+  Global Options:
+    Fixed Frame: map
+    Frame Rate: 30
+  Displays:
+    - Class: rviz_default_plugins/TF
+      Name: TF
+      Show Arrows: true
+    - Class: rviz_default_plugins/Map
+      Name: Map
+      Topic: map                # <-- relative; will be remapped to /robot{ID}/map
+      Queue Size: 10
+    - Class: rviz_default_plugins/LaserScan
+      Name: Scan
+      Topic: scan              # <-- relative; will be remapped to /robot{ID}/scan
+      Size (m): 0.03
+    - Class: rviz_default_plugins/RobotModel
+      Name: RobotModel
+      Description Topic: robot_description   # <-- relative; this comes from the namespaced RSP
+    - Class: rviz_default_plugins/Path
+      Name: GlobalPlan
+      Topic: global_plan
+      Enabled: false
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Distance: 10
+      Pitch: 0.5
+      Yaw: 0.0

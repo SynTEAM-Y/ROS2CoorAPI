@@ -156,6 +156,8 @@ class VisionPickPlace(Node):
         self.declare_parameter('arm_action', '/arm_group_controller/follow_joint_trajectory')
         self.declare_parameter('gripper_action', '/gripper_group_controller/follow_joint_trajectory')
         self.declare_parameter('cmd_vel_topic', '/cmd_vel')
+        self.declare_parameter('wait_for_tf_timeout', 30.0)
+        self.declare_parameter('use_gt_tf_for_nav', True)
         
         # State
         self.state = self.STATE_IDLE
@@ -316,6 +318,58 @@ class VisionPickPlace(Node):
 
         if not self._wait_for_servers():
             return False
+
+        # ── Wait for required TF frames ───────────────────────────────
+        # Before navigation, we need:
+        #   1. odom → base_footprint (robot pose from GT or odom)
+        #   2. camera_link → odom (for detected pose transform)
+        #   3. odom → test_block (for cube position - may not exist yet)
+        self.get_logger().info('[INIT] Waiting for required TF frames...')
+        wait_timeout = self.get_parameter('wait_for_tf_timeout').value
+        use_gt_tf = self.get_parameter('use_gt_tf_for_nav').value
+        tf_deadline = time.monotonic() + wait_timeout
+
+        required_frames = ['base_footprint', 'camera_link']
+        if use_gt_tf:
+            required_frames.append('test_block')
+
+        while time.monotonic() < tf_deadline:
+            rclpy.spin_once(self, timeout_sec=0.1)
+            missing = []
+            for frame in required_frames:
+                try:
+                    self._tf_buffer.lookup_transform('odom', frame, Time(), Duration(seconds=0.1))
+                except Exception:
+                    missing.append(frame)
+
+            if not missing:
+                self.get_logger().info(f'[INIT] All required TF frames available: {required_frames}')
+                break
+
+            if time.monotonic() - tf_deadline + wait_timeout > 5.0:
+                self.get_logger().warn(f'[INIT] Waiting for TF frames: {missing}...')
+            time.sleep(0.5)
+
+        # Check which frames we actually have
+        self._have_gt_pose = False
+        try:
+            self._tf_buffer.lookup_transform('odom', 'base_footprint', Time(), Duration(seconds=0.1))
+            self.get_logger().info('[INIT] odom→base_footprint TF OK')
+        except Exception:
+            self.get_logger().warn('[INIT] odom→base_footprint TF NOT AVAILABLE - using wheel odom')
+
+        try:
+            self._tf_buffer.lookup_transform('camera_link', 'odom', Time(), Duration(seconds=0.1))
+            self.get_logger().info('[INIT] camera_link→odom TF OK')
+        except Exception:
+            self.get_logger().warn('[INIT] camera_link→odom TF NOT AVAILABLE - detected poses stay in camera frame')
+
+        if use_gt_tf:
+            try:
+                self._tf_buffer.lookup_transform('odom', 'test_block', Time(), Duration(seconds=0.1))
+                self.get_logger().info('[INIT] odom→test_block TF OK - will use for navigation')
+            except Exception:
+                self.get_logger().warn('[INIT] odom→test_block TF NOT AVAILABLE - will use detected pose for navigation')
 
         # ── STATE: IDLE ─────────────────────────────────────────────
         self.state = self.STATE_IDLE

@@ -85,10 +85,12 @@ def generate_launch_description():
     # maps the URDF body axis to the Gazebo optical axis so TF can connect
     # the Gazebo-namespaced camera frame (child, optical) through the URDF
     # tree (camera_link -> ... -> map) on the parent side.
-    # Depth camera optical frame bridge. The URDF places the depth_camera sensor
-    # on camera_link, so the Gazebo frame is typically x3plus/camera_link/depth_camera.
-    # We also keep the legacy x3plus/base_footprint/depth_camera name as a fallback
-    # in case an older SDF/URDF version names it differently.
+    # Depth camera optical frame bridge. Gazebo publishes images with frame_id
+    # x3plus/camera_link/depth_camera (Gazebo model hierarchy), but the URDF
+    # tree has camera_link as the parent. We need transform FROM Gazebo frame
+    # TO URDF frame so the camera data can be used in the URDF TF chain.
+    # The rpy=(-pi/2, 0, -pi/2) rotation maps Gazebo optical convention
+    # (x=right, y=down, z=forward) to URDF camera convention.
     static_depth_camera_frame = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
@@ -97,8 +99,8 @@ def generate_launch_description():
                    '--roll', '-1.5707963267948966',
                    '--pitch', '0',
                    '--yaw', '-1.5707963267948966',
-                   '--frame-id', 'camera_link',
-                   '--child-frame-id', 'x3plus/camera_link/depth_camera'],
+                   '--frame-id', 'x3plus/camera_link/depth_camera',
+                   '--child-frame-id', 'camera_link'],
     )
     static_depth_camera_frame_legacy = Node(
         package='tf2_ros',
@@ -108,9 +110,10 @@ def generate_launch_description():
                    '--roll', '-1.5707963267948966',
                    '--pitch', '0',
                    '--yaw', '-1.5707963267948966',
-                   '--frame-id', 'camera_link',
-                   '--child-frame-id', 'x3plus/base_footprint/depth_camera'],
+                   '--frame-id', 'x3plus/base_footprint/depth_camera',
+                   '--child-frame-id', 'camera_link'],
     )
+    # Wrist camera: similar bridge from Gazebo frame to URDF mono_link frame
     static_wrist_camera_frame = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
@@ -119,8 +122,8 @@ def generate_launch_description():
                    '--roll', '-1.5707963267948966',
                    '--pitch', '0',
                    '--yaw', '-1.5707963267948966',
-                   '--frame-id', 'mono_link',
-                   '--child-frame-id', 'x3plus/mono_link/wrist_mono_camera'],
+                   '--frame-id', 'x3plus/mono_link/wrist_mono_camera',
+                   '--child-frame-id', 'mono_link'],
     )
 
 # Object detector
@@ -134,7 +137,8 @@ def generate_launch_description():
             # Use front mono camera
             'camera_topic': '/mono_camera/image_raw',
             'depth_topic': '/depth_camera/depth_image',
-            'camera_info_topic': '/depth_camera/camera_info',
+            # Use camera_info from the remapped topic to get consistent frame_id
+            'camera_info_topic': '/mono_camera/camera_info',
             # Gazebo blue cube RGB(0, 0.5, 1.0) → HSV around hue 100-120
             # Widen range to catch from different angles/lighting
             'hsv_lower_h': 70,
@@ -181,12 +185,15 @@ def generate_launch_description():
     spawn_landing_pad_delayed = TimerAction(period=22.0, actions=[spawn_landing_pad_node])
 
     # ── test_block ground-truth TF ──────────────────────────────────────────
-    # The test_block model.sdf now includes an Ignition PosePublisher plugin
+    # The test_block model.sdf includes an Ignition PosePublisher plugin
     # that publishes /model/test_block/tf (Pose_V → TFMessage via bridge).
     # We relay that into the ROS TF tree as 'odom -> test_block' so that
     # vision_pick_place._cube_is_lifted() can read the cube's z height and
-    # confirm a successful grasp.
+    # _drive_to_face_cube() can know where to drive.
     # Delayed 21 s — just after spawn_test_object fires at 20 s.
+    #
+    # NOTE: Gazebo may publish to /world/{world_name}/model/test_block/tf
+    # depending on version. We bridge both possible topic names.
     test_block_tf_bridge_node = Node(
         package='ros_gz_bridge',
         executable='parameter_bridge',
@@ -197,6 +204,20 @@ def generate_launch_description():
         ],
         remappings=[
             ('/model/test_block/tf', '/gz_test_block_tf'),
+        ],
+        parameters=[{'use_sim_time': True}],
+    )
+    # Fallback bridge for world-namespaced topic (some Gazebo versions)
+    test_block_tf_bridge_world_node = Node(
+        package='ros_gz_bridge',
+        executable='parameter_bridge',
+        name='test_block_tf_bridge_world',
+        output='screen',
+        arguments=[
+            f'/world/{world_str}/model/test_block/tf@tf2_msgs/msg/TFMessage[ignition.msgs.Pose_V',
+        ],
+        remappings=[
+            (f'/world/{world_str}/model/test_block/tf', '/gz_test_block_tf_world'),
         ],
         parameters=[{'use_sim_time': True}],
     )
@@ -217,7 +238,7 @@ def generate_launch_description():
     )
     test_block_tf_delayed = TimerAction(
         period=21.0,
-        actions=[test_block_tf_bridge_node, test_block_tf_relay_node],
+        actions=[test_block_tf_bridge_node, test_block_tf_bridge_world_node, test_block_tf_relay_node],
     )
 
     # Vision-based autopilot node.
@@ -253,6 +274,9 @@ def generate_launch_description():
             {'arm_pid_d': 0.5},
             {'arm_joints': ['arm_joint1', 'arm_joint2', 'arm_joint3', 'arm_joint4', 'arm_joint5']},
             {'gripper_joints': ['grip_joint']},
+            # TF waiting - wait for required transforms before starting navigation
+            {'wait_for_tf_timeout': 30.0},
+            {'use_gt_tf_for_nav': True},
         ]
     )
     vision_autopilot_delayed = TimerAction(period=25.0, actions=[vision_pick_place_node])

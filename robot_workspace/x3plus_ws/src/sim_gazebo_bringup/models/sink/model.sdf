@@ -1,0 +1,84 @@
+<?xml version="1.0" ?>
+<sdf version="1.6">
+  <!--
+    Sink model for dual-robot transport.
+
+    The sink mesh (meshes/sink/sink.obj) is authored in Blender with:
+      - main basin: 0.27 m (X) x 0.07 m (Y) x 0.28 m (Z)
+      - red handles protruding to Z = +/-0.17 m
+      - handle cross-section: ~0.04 m (X) x 0.07 m (Y)
+      - handle thickness (along the sink long axis Z): ~0.03 m
+
+    The model frame origin is at the geometric centre of the mesh, so the
+    two red handles are symmetrically located at approximately
+      handle_left  = (0.0, 0.015, -0.17)  [sink frame]
+      handle_right = (0.0, 0.015, +0.17)  [sink frame]
+    These local offsets are used at runtime to compute grasp targets for
+    arm_joint5 (TCP) of the two helper robots.
+
+    Collision geometry uses the same mesh as the visual so that contact
+    behaviour (grasping, dual-robot lift, placement) matches the rendered
+    shape as closely as possible.
+  -->
+  <model name="sink">
+    <static>false</static>
+    <pose>0 0 0.035 0 0 0</pose>
+
+    <!-- Ground-truth pose publisher: relayed to /tf as odom->sink. -->
+    <plugin filename="ignition-gazebo-pose-publisher-system"
+            name="ignition::gazebo::systems::PosePublisher">
+      <publish_link_pose>false</publish_link_pose>
+      <publish_nested_model_pose>false</publish_nested_model_pose>
+      <publish_model_pose>true</publish_model_pose>
+      <use_pose_vector_msg>true</use_pose_vector_msg>
+      <update_rate>20</update_rate>
+    </plugin>
+
+    <link name="base_link">
+      <inertial>
+        <!-- 2.0 kg: heavy enough to need two robots, light enough for the
+             two X3Plus grippers to lift together. -->
+        <mass>2.0</mass>
+        <inertia>
+          <ixx>0.008</ixx>
+          <iyy>0.025</iyy>
+          <izz>0.020</izz>
+        </inertia>
+      </inertial>
+
+      <collision name="collision">
+        <geometry>
+          <mesh>
+            <uri>model://sim_gazebo_bringup/meshes/sink/sink.obj</uri>
+            <scale>1.0 1.0 1.0</scale>
+          </mesh>
+        </geometry>
+        <surface>
+          <friction>
+            <ode>
+              <mu>1.0</mu>
+              <mu2>1.0</mu2>
+            </ode>
+          </friction>
+          <contact>
+            <ode>
+              <kp>100000.0</kp>
+              <kd>50.0</kd>
+              <max_vel>1.0</max_vel>
+              <min_depth>0.001</min_depth>
+            </ode>
+          </contact>
+        </surface>
+      </collision>
+
+      <visual name="visual">
+        <geometry>
+          <mesh>
+            <uri>model://sim_gazebo_bringup/meshes/sink/sink.obj</uri>
+            <scale>1.0 1.0 1.0</scale>
+          </mesh>
+        </geometry>
+      </visual>
+    </link>
+  </model>
+</sdf>
