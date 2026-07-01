@@ -89,6 +89,11 @@ class ArmController(Node):
         #   grip_joint = -1.54  -> fingers fully OPEN (matches SRDF "open" state)
         self.gripper_open_pos   = -1.54
         self.gripper_closed_pos =  0.00
+        # Hold value for grasping the 4 cm cube: flat parallel pad contact is
+        # at ~-0.43; commanding slightly past it gives a steady squeeze.
+        # Grasping with 0.0 (fully closed) over-squeezes a 4 cm object and
+        # tilts the fingertips into edge contact.
+        self.gripper_hold_pos   = -0.35
 
         # Predefined poses — arm_joint2 NEGATIVE = tilts FORWARD (away from car body)
         #                    arm_joint2 POSITIVE = tilts BACKWARD (into car body — AVOID)
@@ -313,11 +318,11 @@ class ArmController(Node):
             ('1. Home — arm up, gripper open',     self.home_pose, self.gripper_open_pos,   0.0),
             ('2. Pre-pick approach',               pre_pick,       self.gripper_open_pos,   0.0),
             ('3. Reach down to object',            reach_down,     self.gripper_open_pos,   0.1),
-            ('4. Close gripper',                   reach_down,     self.gripper_closed_pos, 0.4),
-            ('5. Lift to carry height',            lifted,         self.gripper_closed_pos, 0.0),
-            ('6. Return to home (safe for rotate)',self.home_pose, self.gripper_closed_pos, 0.0),
-            ('7. Rotate to place side',            rot_lifted,     self.gripper_closed_pos, 0.0),
-            ('8. Lower to place location',         rot_reach,      self.gripper_closed_pos, 0.1),
+            ('4. Close gripper',                   reach_down,     self.gripper_hold_pos,   0.4),
+            ('5. Lift to carry height',            lifted,         self.gripper_hold_pos,   0.0),
+            ('6. Return to home (safe for rotate)',self.home_pose, self.gripper_hold_pos,   0.0),
+            ('7. Rotate to place side',            rot_lifted,     self.gripper_hold_pos,   0.0),
+            ('8. Lower to place location',         rot_reach,      self.gripper_hold_pos,   0.1),
             ('9. Open gripper — release',          rot_reach,      self.gripper_open_pos,   0.4),
             ('10. Lift from place',                rot_lifted,     self.gripper_open_pos,   0.0),
             ('11. Return toward home',             self.home_pose, self.gripper_open_pos,   0.0),

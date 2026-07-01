@@ -1,1 +1,6 @@
-/home/assoc/ROS2CoorAPI/robot_workspace/x3plus_ws/build/x3plus_multi_bringup/config/planning.yaml
+move_group:
+  ros__parameters:
+    planning_pipelines:
+      - ompl
+    default_planning_pipeline: ompl
+    planning_plugin: ompl_interface/OMPLPlanner

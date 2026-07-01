@@ -1,1 +1,128 @@
-/home/assoc/ROS2CoorAPI/robot_workspace/x3plus_ws/build/x3plus_multi_bringup/config/nav2_base.yaml
+# Minimal, stable Nav2 config (Humble)
+amcl:
+  ros__parameters:
+    use_sim_time: false
+    base_frame_id: base_link
+    odom_frame_id: odom
+    global_frame_id: map
+    scan_topic: scan
+    set_initial_pose: true
+
+bt_navigator:
+  ros__parameters:
+    use_sim_time: false
+    global_frame: map
+    robot_base_frame: base_link
+    default_nav_to_pose_bt_xml: "$(find nav2_bt_navigator)/behavior_trees/navigate_w_replanning_and_recovery.xml"
+
+planner_server:
+  ros__parameters:
+    use_sim_time: false
+    expected_planner_frequency: 5.0
+    planner_plugins: ["GridBased"]
+    GridBased:
+      plugin: nav2_navfn_planner/NavfnPlanner
+      tolerance: 0.5
+
+controller_server:
+  ros__parameters:
+    use_sim_time: false
+    controller_frequency: 20.0
+    min_vel_x: 0.0
+    max_vel_x: 0.5
+    min_vel_theta: 0.0
+    max_vel_theta: 1.0
+    controller_plugins: ["FollowPath"]
+    FollowPath:
+      plugin: dwb_core::DWBLocalPlanner
+      # The critics MUST be listed or you'll get the "No critics defined" crash
+      critics: ["RotateToGoal", "Oscillation", "ObstacleFootprint", "PathAlign", "PathDist", "GoalAlign", "GoalDist"]
+      # common critic params
+      PathAlign.scale: 32.0
+      PathDist.scale: 32.0
+      GoalAlign.scale: 24.0
+      GoalDist.scale: 24.0
+      RotateToGoal.scale: 32.0
+      ObstacleFootprint.scale: 0.02
+
+smoother_server:
+  ros__parameters:
+    use_sim_time: false
+    smoother_plugins: ["simple_smoother"]
+    simple_smoother:
+      plugin: nav2_smoother::SimpleSmoother
+
+behavior_server:
+  ros__parameters:
+    use_sim_time: false
+    global_frame: map
+    robot_base_frame: base_link
+    transform_tolerance: 0.1
+
+waypoint_follower:
+  ros__parameters:
+    use_sim_time: false
+    loop_rate: 20.0
+
+velocity_smoother:
+  ros__parameters:
+    use_sim_time: false
+    smoothing_frequency: 20.0
+    feedback: "OPEN_LOOP"
+
+# Costmaps
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      use_sim_time: false
+      global_frame: map
+      robot_base_frame: base_link
+      update_frequency: 2.0
+      publish_frequency: 1.0
+      resolution: 0.05
+      track_unknown_space: true
+      # IMPORTANT: width/height must be floats in one place only to avoid type conflicts
+      width: 80.0
+      height: 80.0
+      origin_x: -20.0
+      origin_y: -20.0
+      rolling_window: false
+      plugins: ["static_layer", "inflation_layer"]
+      static_layer:
+        plugin: nav2_costmap_2d::StaticLayer
+        map_subscribe_transient_local: True
+      inflation_layer:
+        plugin: nav2_costmap_2d::InflationLayer
+        inflation_radius: 0.6
+        cost_scaling_factor: 10.0
+
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      use_sim_time: false
+      global_frame: odom
+      robot_base_frame: base_link
+      update_frequency: 10.0
+      publish_frequency: 5.0
+      rolling_window: true
+      resolution: 0.05
+      # window size around the robot (floats!)
+      width: 6.0
+      height: 6.0
+      # center window on robot, origin not needed for rolling window
+      plugins: ["obstacle_layer", "inflation_layer"]
+      obstacle_layer:
+        plugin: nav2_costmap_2d::ObstacleLayer
+        observation_sources: scan
+        scan:
+          topic: scan
+          clearing: true
+          marking: true
+          data_type: LaserScan
+          inf_is_valid: true
+          obstacle_range: 3.0
+          raytrace_range: 3.5
+      inflation_layer:
+        plugin: nav2_costmap_2d::InflationLayer
+        inflation_radius: 0.6
+        cost_scaling_factor: 10.0

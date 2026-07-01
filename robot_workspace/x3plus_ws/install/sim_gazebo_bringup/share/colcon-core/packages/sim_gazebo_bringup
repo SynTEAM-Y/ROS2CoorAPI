@@ -1,1 +1,1 @@
-geometry_msgs:joint_state_publisher:nav_msgs:rclpy:robot_state_publisher:ros_gz_sim:rviz2:sensor_msgs:std_msgs:xacro:yahboomcar_description
+cv_bridge:geometry_msgs:joint_state_publisher:moveit_simple_controller_manager:nav2_simple_commander:nav_msgs:opencv:rclpy:robot_state_publisher:ros_gz_bridge:ros_gz_sim:rviz2:sensor_msgs:std_msgs:tf2:tf2_msgs:tf2_ros:xacro

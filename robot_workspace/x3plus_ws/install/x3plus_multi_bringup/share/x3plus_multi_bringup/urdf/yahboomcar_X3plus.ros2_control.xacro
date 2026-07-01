@@ -1,1 +1,77 @@
-/home/assoc/ROS2CoorAPI/robot_workspace/x3plus_ws/build/x3plus_multi_bringup/urdf/yahboomcar_X3plus.ros2_control.xacro
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <!--
+    Macro to add ros2_control to the Yahboom X3 Plus arm.
+
+    params:
+      name  - name of the ros2_control system
+      prefix - joint prefix, e.g. "robot101_"
+      initial_positions_file - yaml with "initial_positions" dict
+  -->
+  <xacro:macro name="yahboomcar_X3plus_ros2_control"
+               params="name prefix initial_positions_file">
+
+    <xacro:property name="initial_positions"
+                    value="${xacro.load_yaml(initial_positions_file)['initial_positions']}"/>
+
+    <ros2_control name="${name}" type="system">
+      <hardware>
+        <!-- simulation hardware -->
+        <plugin>mock_components/GenericSystem</plugin>
+      </hardware>
+
+      <!-- Arm joints -->
+      <joint name="${prefix}arm_joint1">
+        <command_interface name="position"/>
+        <state_interface name="position">
+          <param name="initial_value">${initial_positions['arm_joint1']}</param>
+        </state_interface>
+        <state_interface name="velocity"/>
+      </joint>
+
+      <joint name="${prefix}arm_joint2">
+        <command_interface name="position"/>
+        <state_interface name="position">
+          <param name="initial_value">${initial_positions['arm_joint2']}</param>
+        </state_interface>
+        <state_interface name="velocity"/>
+      </joint>
+
+      <joint name="${prefix}arm_joint3">
+        <command_interface name="position"/>
+        <state_interface name="position">
+          <param name="initial_value">${initial_positions['arm_joint3']}</param>
+        </state_interface>
+        <state_interface name="velocity"/>
+      </joint>
+
+      <joint name="${prefix}arm_joint4">
+        <command_interface name="position"/>
+        <state_interface name="position">
+          <param name="initial_value">${initial_positions['arm_joint4']}</param>
+        </state_interface>
+        <state_interface name="velocity"/>
+      </joint>
+
+      <joint name="${prefix}arm_joint5">
+        <command_interface name="position"/>
+        <state_interface name="position">
+          <param name="initial_value">${initial_positions['arm_joint5']}</param>
+        </state_interface>
+        <state_interface name="velocity"/>
+      </joint>
+
+      <!-- Gripper -->
+      <joint name="${prefix}grip_joint">
+        <command_interface name="position"/>
+        <state_interface name="position">
+          <param name="initial_value">${initial_positions['grip_joint']}</param>
+        </state_interface>
+        <state_interface name="velocity"/>
+      </joint>
+
+    </ros2_control>
+  </xacro:macro>
+
+</robot>

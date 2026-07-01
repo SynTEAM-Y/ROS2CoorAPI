@@ -26,10 +26,22 @@ install(
   DESTINATION share/${PROJECT_NAME}/maps
 )
 
+# Copy configuration files (nav2_params.yaml, etc.)
+install(
+  DIRECTORY config/
+  DESTINATION share/${PROJECT_NAME}/config
+)
+
 # Copy RViz configuration files to install directory
 install(
   DIRECTORY rviz/
   DESTINATION share/${PROJECT_NAME}/rviz
+)
+
+# Copy custom models (test_block, landing_pad) to install directory
+install(
+  DIRECTORY models/
+  DESTINATION share/${PROJECT_NAME}/models
 )
 
 # ===== Isolated overrides (your work, kept inside this package) =====
@@ -65,6 +77,25 @@ install(
   DESTINATION share/${PROJECT_NAME}/urdf
 )
 
+# Rewrite mesh URIs for the dedicated multi-robot URDF xacro
+file(READ
+  "${CMAKE_CURRENT_SOURCE_DIR}/scripts/yahboomcar_description/urdf/yahboomcar_X3plus_multi.urdf.xacro"
+  _XACRO_CONTENT_MULTI
+)
+string(REPLACE
+  "package://yahboomcar_description/meshes/"
+  "package://sim_gazebo_bringup/meshes/"
+  _XACRO_CONTENT_MULTI "${_XACRO_CONTENT_MULTI}"
+)
+file(WRITE
+  "${CMAKE_CURRENT_BINARY_DIR}/generated/urdf/yahboomcar_X3plus_multi.urdf.xacro"
+  "${_XACRO_CONTENT_MULTI}"
+)
+install(
+  FILES "${CMAKE_CURRENT_BINARY_DIR}/generated/urdf/yahboomcar_X3plus_multi.urdf.xacro"
+  DESTINATION share/${PROJECT_NAME}/urdf
+)
+
 # Install our Python nodes as ROS executables. They become runnable as:
 #   ros2 run sim_gazebo_bringup manual_control
 #   ros2 run sim_gazebo_bringup arm_controller
@@ -79,6 +110,60 @@ install(PROGRAMS scripts/x3plus_examples/arm_controller.py
 install(PROGRAMS scripts/x3plus_examples/gripper_mimic_relay.py
         DESTINATION lib/${PROJECT_NAME}
         RENAME gripper_mimic_relay)
+install(PROGRAMS scripts/x3plus_examples/gazebo_pose_tf_relay.py
+        DESTINATION lib/${PROJECT_NAME}
+        RENAME gazebo_pose_tf_relay)
+install(PROGRAMS scripts/x3plus_examples/robot_description_publisher.py
+        DESTINATION lib/${PROJECT_NAME}
+        RENAME robot_description_publisher)
+install(PROGRAMS scripts/x3plus_examples/diff_drive_simulator.py
+        DESTINATION lib/${PROJECT_NAME}
+        RENAME diff_drive_simulator)
+install(PROGRAMS scripts/x3plus_examples/map_publisher.py
+        DESTINATION lib/${PROJECT_NAME}
+        RENAME map_publisher)
+install(PROGRAMS scripts/x3plus_examples/pick_and_place.py
+        DESTINATION lib/${PROJECT_NAME}
+        RENAME pick_and_place)
+install(PROGRAMS scripts/x3plus_examples/spawn_test_object.py
+        DESTINATION lib/${PROJECT_NAME}
+        RENAME spawn_test_object)
+install(PROGRAMS scripts/x3plus_examples/object_detector.py
+        DESTINATION lib/${PROJECT_NAME}
+        RENAME object_detector)
+install(PROGRAMS scripts/x3plus_examples/debug_vision.py
+        DESTINATION lib/${PROJECT_NAME}
+        RENAME debug_vision)
+install(PROGRAMS scripts/x3plus_examples/object_navigator.py
+        DESTINATION lib/${PROJECT_NAME}
+        RENAME object_navigator)
+install(PROGRAMS scripts/x3plus_examples/trajectory_bridge.py
+        DESTINATION lib/${PROJECT_NAME}
+        RENAME trajectory_bridge)
+install(PROGRAMS scripts/x3plus_examples/send_goal.py
+        DESTINATION lib/${PROJECT_NAME}
+        RENAME send_goal)
+install(PROGRAMS scripts/x3plus_examples/sensor_visualizer.py
+        DESTINATION lib/${PROJECT_NAME}
+        RENAME sensor_visualizer)
+install(PROGRAMS scripts/x3plus_examples/vision_pick_place.py
+        DESTINATION lib/${PROJECT_NAME}
+        RENAME vision_pick_place)
+install(PROGRAMS scripts/x3plus_examples/vision_autopilot_simple.py
+        DESTINATION lib/${PROJECT_NAME}
+        RENAME vision_autopilot_simple)
+install(PROGRAMS scripts/x3plus_examples/multi_robot_cube_sink_autopilot.py
+        DESTINATION lib/${PROJECT_NAME}
+        RENAME multi_robot_cube_sink_autopilot)
+install(PROGRAMS scripts/x3plus_examples/cmd_vel_relay.py
+        DESTINATION lib/${PROJECT_NAME}
+        RENAME cmd_vel_relay)
+install(PROGRAMS scripts/test_gripper_calibration.py
+        DESTINATION lib/${PROJECT_NAME}
+        RENAME test_gripper_calibration)
+install(PROGRAMS scripts/x3plus_examples/cube_attach_detach.py
+        DESTINATION lib/${PROJECT_NAME}
+        RENAME cube_attach_detach)
 
 # Run linting
 if(BUILD_TESTING)

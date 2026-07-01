@@ -1,0 +1,40 @@
+# HSV color ranges for object detection
+# Format: [H, S, V] where H is 0-180, S and V are 0-255 in OpenCV
+#
+# ✅ CALIBRATED FOR GAZEBO TEST_BLOCK (2 CM BLUE CUBE)
+# These values are used by vision_autopilot_simple.py and match
+# Gazebo's consistent lighting conditions.
+#
+# Gazebo renders test_block (ambient 0,0.5,1) at hue ~98, so we use 90-124.
+# Saturation and Value ranges are restrictive for consistent blob detection.
+#
+# To recalibrate for different lighting, run:
+#   ros2 run sim_gazebo_bringup object_detector --ros-args -p calibrate_mode:=true
+
+# ⭐ BLUE (Test Cube) — Used by vision_autopilot_simple.py
+blue:
+  lower: [90, 43, 46]    # Hue: 90 (tight range for Gazebo blue)
+  upper: [124, 255, 255] # Hue: 124, Full Saturation & Value
+  # Manufacturer reference: Similar HSV range for their ~2-3cm blue cubes
+  # Simulation adjustment: Hue shifted to 90-124 for Gazebo lighting
+
+# Green (Landing Pad)
+green:
+  lower: [55, 128, 146]
+  upper: [125, 253, 255]
+
+# Red
+red:
+  lower: [0, 85, 126]
+  upper: [9, 253, 255]
+
+# Yellow
+yellow:
+  lower: [24, 98, 245]
+  upper: [125, 253, 255]
+
+# Detection parameters
+detection:
+  min_area: 200        # Minimum blob area (pixels²)
+  max_objects: 5       # Maximum objects to track
+  depth_scale: 0.001   # Depth camera scale factor (if used)

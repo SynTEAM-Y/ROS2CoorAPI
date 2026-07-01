@@ -1,0 +1,189 @@
+<?xml version="1.0"?>
+<sdf version="1.9">
+  <!--
+    Multi-robot pick-and-place / dual-robot sink transport scene.
+
+    This world follows the same structure as worlds/office.sdf (plugins,
+    physics, ground plane, lighting, wall) used by vision_autopilot_simple.py,
+    but is sized for three X3Plus robots and the dual-robot sink transport
+    task.  The wall matches office.sdf: 2 m wide x 0.15 m thick x 0.5 m tall,
+    placed at (2, 2.5) so it does not collide with the landing pad at
+    (2.0, 1.2).
+
+    World-frame layout (matches vision_autopilot_simple.py coordinate
+    convention; X=forward for a robot at the origin, Y=left, Z=up):
+
+      blue cube          at (2.0, -1.2, 0.03)        # pick target
+      sink (sink.obj)    at (2.0,  0.0, 0.035)       # between landing & cube
+      green landing pad  at (2.0,  1.2, 0.001)       # secondary reference
+      yellow object      at (0.0,  1.5, 0.0025)      # drop target for cube
+      wall               at (2.0,  2.5, 0.25)        # static obstacle (back)
+
+    The sink is centred between the green landing pad and the blue cube; the
+    two red handles protrude along the sink's local Z axis (which becomes
+    world Y after the roll=pi/2 spawn orientation), so robot_2 and robot_3
+    approach the sink from +/-Y respectively.
+  -->
+  <world name="multi_robot_scene">
+
+    <!-- Required Ignition Fortress system plugins. -->
+    <plugin filename="ignition-gazebo-physics-system"
+            name="ignition::gazebo::systems::Physics"/>
+    <plugin filename="ignition-gazebo-user-commands-system"
+            name="ignition::gazebo::systems::UserCommands"/>
+    <plugin filename="ignition-gazebo-scene-broadcaster-system"
+            name="ignition::gazebo::systems::SceneBroadcaster"/>
+    <plugin filename="ignition-gazebo-sensors-system"
+            name="ignition::gazebo::systems::Sensors">
+      <render_engine>ogre</render_engine>
+    </plugin>
+
+      <physics name="default_physics" type="ode">
+        <!-- Run physics with stable 5 ms steps (200 Hz update rate).
+             Using a coarse 20 ms step size at 50 Hz causes numerical instability,
+             violent joint vibrations (shaking), and poor constraint solving.
+             A 5 ms step size provides highly stable physics and smooth movements,
+             while allowing the simulator to run at a lower, CPU-friendly
+             Real-Time Factor (RTF) stably under use_sim_time. -->
+        <max_step_size>0.005</max_step_size>
+        <real_time_update_rate>200</real_time_update_rate>
+      <gravity>0 0 -9.8</gravity>
+      <ode>
+        <solver>
+          <type>quick</type>
+          <iters>50</iters>
+          <precon_iters>0</precon_iters>
+          <precon_tolerance>0</precon_tolerance>
+          <max_vel>100</max_vel>
+          <surface_layer>0.001</surface_layer>
+        </solver>
+        <constraints>
+          <cfm>1e-5</cfm>
+          <erp>0.2</erp>
+          <contact_max_correcting_vel>100</contact_max_correcting_vel>
+          <contact_surface_layer>0.001</contact_surface_layer>
+        </constraints>
+      </ode>
+    </physics>
+
+    <!-- Ground plane -->
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <plane>
+              <normal>0 0 1</normal>
+              <size>100 100</size>
+            </plane>
+          </geometry>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <plane>
+              <normal>0 0 1</normal>
+              <size>100 100</size>
+            </plane>
+          </geometry>
+          <material>
+            <ambient>0.8 0.8 0.8 1</ambient>
+            <diffuse>0.8 0.8 0.8 1</diffuse>
+            <specular>0.8 0.8 0.8 1</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Sun -->
+    <light name="sun" type="directional">
+      <cast_shadows>true</cast_shadows>
+      <pose>0 0 10 0 0 0</pose>
+      <diffuse>0.8 0.8 0.8 1</diffuse>
+      <specular>0.2 0.2 0.2 1</specular>
+      <attenuation>
+        <range>1000</range>
+        <constant>0.9</constant>
+        <linear>0.01</linear>
+        <quadratic>0.001</quadratic>
+      </attenuation>
+      <direction>-0.5 0.1 -0.9</direction>
+    </light>
+
+    <!-- Back wall -->
+    <model name="wall">
+      <static>true</static>
+      <pose>2 2.5 0.25 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <box>
+              <size>2.0 0.15 0.5</size>
+            </box>
+          </geometry>
+          <surface>
+            <friction>
+              <ode>
+                <mu>1.0</mu>
+                <mu2>1.0</mu2>
+              </ode>
+            </friction>
+          </surface>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <box>
+              <size>2.0 0.15 0.5</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.6 0.5 0.4 1</ambient>
+            <diffuse>0.8 0.7 0.6 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Manipulable objects: included directly so their PosePublisher plugins
+         are available as soon as the world loads, avoiding spawn races.
+
+         Per the task spec the sink IS the yellow drop target: Robot 1 picks
+         the blue cube and places it on top of the sink basin.  There is no
+         separate yellow_object model in this scene.
+
+         Layout (mirrors vision_autopilot_simple.py's coordinate convention;
+         X = robot-forward, Y = left, Z = up):
+            blue cube          at (2.0, -1.2, 0.03)   # pick target
+            sink (yellow)       at (2.0,  0.0, 0.035)  # drop target for cube
+            green landing pad   at (2.0,  1.2, 0.001)  # static reference
+            wall                at (2.0,  2.5, 0.25)   # static obstacle
+
+         The sink is geometrically centred between the blue cube (-Y side)
+         and the green landing pad (+Y side).  The sink is rolled pi/2 so its
+         local Z axis points along world Y; the two red handles therefore
+         protrude in the world +/-Y directions. -->
+      <!-- The 4 cm cube sits directly on the FLOOR (no platform).  The
+           cube centre is at z=0.02 m (half cube height).  The pads grip
+           the cube on the sides at z=0.02 m.  This eliminates the
+           "cube falls off the platform" issue when the gripper bumps
+           the cube during approach. -->
+      <include>
+       <uri>model://sim_gazebo_bringup/models/test_block</uri>
+       <name>test_block</name>
+       <!-- Spawn directly on the floor (z=0.02 m = half-cube height).
+            No fall, no platform to knock the cube off. -->
+       <pose>2.0 -1.2 0.02 0 0 0</pose>
+     </include>
+    <include>
+      <uri>model://sim_gazebo_bringup/models/sink</uri>
+      <name>sink</name>
+      <pose>2.0 0.0 0.035 1.57079632679 0 0</pose>
+    </include>
+    <include>
+      <uri>model://sim_gazebo_bringup/models/landing_pad</uri>
+      <name>landing_pad</name>
+      <pose>2.0 1.2 0.001 0 0 0</pose>
+    </include>
+
+  </world>
+</sdf>

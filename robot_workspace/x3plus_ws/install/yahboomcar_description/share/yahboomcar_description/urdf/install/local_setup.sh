@@ -1,1 +1,0 @@
-/home/assoc/ROS2CoorAPI/robot_workspace/x3plus_ws/src/yahboomcar_description/urdf/install/local_setup.sh

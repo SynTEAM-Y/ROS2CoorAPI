@@ -1,1 +1,2 @@
-/home/assoc/ROS2CoorAPI/robot_workspace/x3plus_ws/build/orbbec_description/ament_cmake_environment_hooks/local_setup.dsv
+source;share/orbbec_description/environment/ament_prefix_path.sh
+source;share/orbbec_description/environment/path.sh

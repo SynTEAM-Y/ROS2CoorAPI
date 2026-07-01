@@ -1,1 +1,1 @@
-/home/assoc/ROS2CoorAPI/robot_workspace/x3plus_ws/src/sim_gazebo_bringup/launch/gazebo.launch.py
+/home/othman/ROS2CoorAPI/robot_workspace/x3plus_ws/src/sim_gazebo_bringup/launch/gazebo.launch.py

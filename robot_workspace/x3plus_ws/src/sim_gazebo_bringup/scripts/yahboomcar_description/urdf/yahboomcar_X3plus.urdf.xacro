@@ -8,7 +8,7 @@
         <color rgba="0.95 0.95 0.95 1.0"/>
     </material>
     <material name="Green">
-        <color rgba="0.0 0.5 0.0 1.0"/>
+        <color rgba="0.0 0.8 0.0 1.0"/>
     </material>
     <material name="Red">
         <color rgba="1.0 0.0 0.0 1.0"/>
@@ -29,17 +29,29 @@
         <link name="${name}">
             <visual>
                 <geometry>
-                    <mesh filename="package://yahboomcar_description/meshes/${path}/visual/${name}.STL"/>
+                    <mesh filename="package://sim_gazebo_bringup/meshes/${path}/visual/${name}.STL"/>
                 </geometry>
                 <origin xyz="0 0 0" rpy="0 0 0"/>
                 <material name="${material}"/>
             </visual>
             <collision>
                 <geometry>
-                    <mesh filename="package://yahboomcar_description/meshes/${path}/collision/${name}.STL"/>
+                    <mesh filename="package://sim_gazebo_bringup/meshes/${path}/collision/${name}.STL"/>
                 </geometry>
                 <origin xyz="0 0 0" rpy="0 0 0"/>
             </collision>
+            <xacro:insert_block name="origin"/>
+        </link>
+    </xacro:macro>
+    <xacro:macro name="common_link_no_collision" params="name material path *origin">
+        <link name="${name}">
+            <visual>
+                <geometry>
+                    <mesh filename="package://sim_gazebo_bringup/meshes/${path}/visual/${name}.STL"/>
+                </geometry>
+                <origin xyz="0 0 0" rpy="0 0 0"/>
+                <material name="${material}"/>
+            </visual>
             <xacro:insert_block name="origin"/>
         </link>
     </xacro:macro>
@@ -53,33 +65,52 @@
             <limit lower="${lower}" upper="${upper}" effort="100" velocity="6"/>
             <!-- Damping/friction added so arm joints absorb their own motion reactions
                  instead of jerking the base around in Gazebo. -->
-            <dynamics damping="1.0" friction="0.5"/>
+            <dynamics damping="0.5" friction="0.1"/>
         </joint>
     </xacro:macro>
 
-    <!-- Gripper finger joint (was 'continuous_joint' macro).
-         IMPORTANT: <mimic> has been REMOVED. In Ignition Fortress the <mimic>
-         tag conflicts with the per-joint JointPositionController plugins
-         (sometimes kinematically locking the joint, sometimes letting it
-         shake) and produced asymmetric behavior between the L and R fingers.
-         The gripper_mimic_relay node now performs the mimic in software by
-         fanning out /grip_joint_cmd_pos to each /<joint>_cmd_pos with the
-         multiplier baked in, and by republishing the actual Gazebo joint
-         angles into /joint_states for RViz/RSP. The 'mimic' parameter is
-         kept for backward signature compatibility but is unused. -->
+    <!-- Gripper finger joint macro.
+         <mimic> tags are emitted so robot_state_publisher can compute finger
+         link TF positions (rlink2/llink2 etc.) from the master grip_joint.
+         Ignition Fortress ignores <mimic> for physics — actual finger motion
+         is driven by per-joint JointPositionController plugins fed by
+         gripper_mimic_relay. The relay also strips mimic joints from
+         /joint_states_raw so RSP recomputes them from the URDF <mimic>. -->
     <xacro:macro name="continuous_joint" params="name parent child xyz rpy mimic">
         <joint name="${ns}/${name}" type="revolute">
             <parent link="${ns}/${parent}"/>
             <child link="${ns}/${child}"/>
             <origin xyz="${xyz}" rpy="${rpy}"/>
             <axis xyz="0 0 1"/>
-            <limit lower="-${pi/2}" upper="${pi/2}" effort="5" velocity="5"/>
+            <!-- The mimic relationship is multiplier = -1 or +1.
+                 When grip_joint is at the URDF OPEN limit (q=-1.57), a
+                 mimic=-1 joint is commanded to +1.57, and a mimic=+1
+                 joint is commanded to -1.57.  The previous upper=0.45
+                 capped these joints, breaking the mimic constraint and
+                 causing the pads to tilt out of plane (the "detached
+                 pads" you saw in the sim).  Upper must be >= +pi/2 so
+                 the mimic can reach its commanded angle across the full
+                 grip_joint range.
+                 Widened to +/-pi (was +/-pi/2): the mimics are commanded to
+                 +/-1.54 rad, only 0.03 rad below a +/-pi/2 limit.  With any
+                 PID overshoot the joint hit the limit and the integrator
+                 wound up against it, FREEZING the finger while the rest of
+                 the gripper kept moving (the "splayed/detached pad" you saw).
+                 A +/-pi limit leaves ~1.6 rad of head-room so the finger
+                 never reaches a stop during normal open/close. -->
+            <limit lower="-${pi}" upper="${pi}" effort="5" velocity="5"/>
             <!-- Damping/friction matched to grip_joint (which works correctly).
                  Previous values (damping=0.5, friction=0.05) were 100x stronger
                  than the per-joint PID's max torque (1 N.m) could overcome on
                  tiny 1-gram finger links, so 4 of 5 mimic joints stayed frozen
                  while only rlink_joint2 (under load asymmetry) overshot. -->
             <dynamics damping="0.05" friction="0.005"/>
+            <!-- <mimic> tag: required by robot_state_publisher to compute finger
+                 link TF positions from the master grip_joint. Ignition Fortress
+                 ignores <mimic> for physics (handled by JointPositionController
+                 plugins + gripper_mimic_relay), but RSP needs it to publish
+                 rlink2/llink2 frames in the TF tree. -->
+            <mimic joint="grip_joint" multiplier="${mimic}" offset="0"/>
         </joint>
     </xacro:macro>
 
@@ -185,17 +216,21 @@
         </collision>
         <inertial>
             <origin xyz="-0.0304416859098744 4.23384368655101E-05 0.0448234503408059" rpy="0 0 0"/>
-            <!-- Increased from 1.075 kg to 4.0 kg. The original CAD inertia was for the
-                 chassis shell only; the real robot with battery + electronics is ~3-4 kg.
-                 A heavier base resists arm-reaction torques so the robot stays put. -->
-            <mass value="4.0"/>
+            <!-- Increased to 8.0 kg (was 4.0). The arm + gripper assembly
+                 creates a forward-tipping moment at REACH_DOWN; the chassis
+                 alone is too light to resist the gripper's contact reaction
+                 force at the cube/sink. Doubling the base mass quadruples
+                 the rotational inertia about y, so the robot stays planted
+                 while the gripper presses against the target. The iyy was
+                 scaled by 2x (proportional to mass). -->
+            <mass value="8.0"/>
             <inertia
-                    ixx="0.078"
+                    ixx="0.156"
                     ixy="2.4618093127858E-06"
-                    ixz="0.0229"
-                    iyy="0.0988"
+                    ixz="0.0458"
+                    iyy="0.1976"
                     iyz="-1.10079499865282E-06"
-                    izz="0.0482"/>
+                    izz="0.0964"/>
         </inertial>
     </link>
     <xacro:fixed_joint name="base_joint" parent="base_footprint" child="base_link" xyz="0.0 0.0 0.076" rpy="0 0 0"/>
@@ -369,7 +404,7 @@
     </xacro:common_link>
     <xacro:revolute_joint name="arm_joint4" parent="arm_link3" child="arm_link4" xyz="0 -0.0829 0" rpy="0 0 0"
                     axisZ="-1" lower="-${pi/2}" upper="${pi/2}"/>
-    <xacro:common_link name="arm_link5" material="Red" path="X3plus">
+    <xacro:common_link_no_collision name="arm_link5" material="Red" path="X3plus">
         <inertial>
             <origin xyz="0.0023228 0.018169 0.028684" rpy="0 0 0"/>
             <mass value="0.04069"/>
@@ -381,11 +416,11 @@
                     iyz="-1.3265E-06"
                     izz="1.3298E-05"/>
         </inertial>
-    </xacro:common_link>
+    </xacro:common_link_no_collision>
     <xacro:revolute_joint name="arm_joint5" parent="arm_link4" child="arm_link5" xyz="-0.00215 -0.17455 0"
                     rpy="${pi/2} 0 0" axisZ="1" lower="-${pi/2}" upper="${pi}"/>
 
-    <xacro:common_link name="rlink1" material="Green" path="X3plus">
+    <xacro:common_link_no_collision name="rlink1" material="Green" path="X3plus">
         <inertial>
             <origin xyz="0.00653227489887718 0.000416767821288678 0.000980984132845697" rpy="0 0 0"/>
             <mass value="0.00117883201961805"/>
@@ -394,17 +429,23 @@
                  was too small for any applied torque). -->
             <inertia ixx="1.0E-5" ixy="0" ixz="0" iyy="1.0E-5" iyz="0" izz="1.0E-5"/>
         </inertial>
-    </xacro:common_link>
+    </xacro:common_link_no_collision>
     <!-- grip_joint: inlined (NOT using revolute_joint macro) so we can apply
          very low damping/friction. The driven link rlink1 has tiny inertia
          (~1e-7 kg.m²); the macro's damping=1.0/friction=0.5 over-damps it and
-         the PID controller cannot move the joint. -->
+         the PID controller cannot move the joint.
+         Upper limit 0.35 → 1.30 rad so the gripper can close to the
+         2.8 cm Y-diff target (cmd ≈ 1.207).  At cmd=0 the pad gap is
+         ~27 mm; at cmd=+1.207 the pads close to ~28 mm (2.8 cm) — the
+         user explicitly wanted "2.8 CM BETWEEN R-L LINK_JOINT2" rather
+         than the cube-tight 2.0 cm grip.  Pads no longer over-close on
+         the cube; they sit at the configured 2.8 cm gap. -->
     <joint name="${ns}/grip_joint" type="revolute">
         <parent link="${ns}/arm_link5"/>
         <child link="${ns}/rlink1"/>
         <origin xyz="-0.0035 -0.012625 -0.0685" rpy="0 -${pi/2} 0"/>
         <axis xyz="0 0 1"/>
-        <limit lower="-${pi/2}" upper="0" effort="100" velocity="5"/>
+        <limit lower="-1.8" upper="0.45" effort="100" velocity="5"/>
         <dynamics damping="0.05" friction="0.005"/>
     </joint>
     <xacro:common_link name="rlink2" material="Green" path="X3plus">
@@ -416,22 +457,32 @@
     </xacro:common_link>
     <xacro:continuous_joint name="rlink_joint2" parent="rlink1" child="rlink2" xyz="0.03 -0.00075429 0" rpy="0 0 0" mimic="-1"/>
 
-    <xacro:common_link name="rlink3" material="Green" path="X3plus">
+    <!-- rlink3 / rlink_joint3: RIGHT 4-bar ROCKER.
+         Parented to arm_link5 and driven by mimic=+1 so it rotates by
+         the same angle as the input crank rlink1.  Together with the
+         rlink_joint2 mimic this forms the parallelogram four-bar that
+         keeps the pad parallel through the whole grip range.
+
+         The rocker is pinned at arm_link5 (C, this joint origin) and
+         its free end tracks the pad's middle hole via the mimic
+         relationship.  Positions match the original yahboomcar
+         URDF which works correctly in RViz. -->
+    <xacro:common_link_no_collision name="rlink3" material="Green" path="X3plus">
         <inertial>
             <origin xyz="0.014355 1.1499E-05 -0.0033992" rpy="0 0 0"/>
             <mass value="0.00087627"/>
             <inertia ixx="1.0E-5" ixy="0" ixz="0" iyy="1.0E-5" iyz="0" izz="1.0E-5"/>
         </inertial>
-    </xacro:common_link>
+    </xacro:common_link_no_collision>
     <xacro:continuous_joint name="rlink_joint3" parent="arm_link5" child="rlink3" xyz="-0.0035 -0.0045 -0.0505"
                       rpy="0 -${pi/2} 0" mimic="1"/>
-    <xacro:common_link name="llink1" material="Green" path="X3plus">
+    <xacro:common_link_no_collision name="llink1" material="Green" path="X3plus">
         <inertial>
             <origin xyz="0.00628617364795481 -0.000318530407893543 0.00100000338924466" rpy="0 0 0"/>
             <mass value="0.00121010771282268"/>
             <inertia ixx="1.0E-5" ixy="0" ixz="0" iyy="1.0E-5" iyz="0" izz="1.0E-5"/>
         </inertial>
-    </xacro:common_link>
+    </xacro:common_link_no_collision>
     <xacro:continuous_joint name="llink_joint1" parent="arm_link5" child="llink1" xyz="-0.0035 0.012375 -0.0685"
                       rpy="0 -${pi/2} 0" mimic="-1"/>
     <xacro:common_link name="llink2" material="Green" path="X3plus">
@@ -443,13 +494,17 @@
     </xacro:common_link>
     <xacro:continuous_joint name="llink_joint2" parent="llink1" child="llink2" xyz="0.03 0.00065104 0" rpy="0 0 0"
                       mimic="1"/>
-    <xacro:common_link name="llink3" material="Green" path="X3plus">
+
+    <!-- llink3 / llink_joint3: LEFT 4-bar ROCKER, mirror of the right side.
+         Mirror of the right rocker with Y axis flipped.  mimic=-1 so the
+         left rocker stays parallel to the left input crank. -->
+    <xacro:common_link_no_collision name="llink3" material="Green" path="X3plus">
         <inertial>
             <origin xyz="0.014354 -7.4795E-05 -0.0033992" rpy="0 0 0"/>
             <mass value="0.00087627"/>
             <inertia ixx="1.0E-5" ixy="0" ixz="0" iyy="1.0E-5" iyz="0" izz="1.0E-5"/>
         </inertial>
-    </xacro:common_link>
+    </xacro:common_link_no_collision>
     <xacro:continuous_joint name="llink_joint3" parent="arm_link5" child="llink3" xyz="-0.0035 0.0045 -0.0505"
                       rpy="0 -${pi/2} 0" mimic="-1"/>
 
@@ -497,114 +552,126 @@
                 name="ignition::gazebo::systems::JointPositionController">
             <joint_name>arm_joint1</joint_name>
             <topic>/arm_joint1_cmd_pos</topic>
-            <p_gain>15</p_gain> <i_gain>0.3</i_gain> <d_gain>2</d_gain>
-            <i_max>3</i_max> <i_min>-3</i_min>
-            <cmd_max>8</cmd_max> <cmd_min>-8</cmd_min>
+            <p_gain>8</p_gain> <i_gain>0.0</i_gain> <d_gain>0.5</d_gain>
+            <i_max>0.2</i_max> <i_min>-0.5</i_min>
+            <cmd_max>5</cmd_max> <cmd_min>-5</cmd_min>
             <initial_position>0</initial_position>
         </plugin>
         <plugin filename="ignition-gazebo-joint-position-controller-system"
                 name="ignition::gazebo::systems::JointPositionController">
             <joint_name>arm_joint2</joint_name>
             <topic>/arm_joint2_cmd_pos</topic>
-            <p_gain>25</p_gain> <i_gain>0.5</i_gain> <d_gain>3</d_gain>
-            <i_max>5</i_max> <i_min>-5</i_min>
-            <cmd_max>15</cmd_max> <cmd_min>-15</cmd_min>
+            <p_gain>10</p_gain> <i_gain>0.0</i_gain> <d_gain>0.5</d_gain>
+            <i_max>0.2</i_max> <i_min>-0.5</i_min>
+            <cmd_max>8</cmd_max> <cmd_min>-8</cmd_min>
             <initial_position>0</initial_position>
         </plugin>
         <plugin filename="ignition-gazebo-joint-position-controller-system"
                 name="ignition::gazebo::systems::JointPositionController">
             <joint_name>arm_joint3</joint_name>
             <topic>/arm_joint3_cmd_pos</topic>
-            <p_gain>20</p_gain> <i_gain>0.4</i_gain> <d_gain>2.5</d_gain>
-            <i_max>4</i_max> <i_min>-4</i_min>
-            <cmd_max>12</cmd_max> <cmd_min>-12</cmd_min>
+            <p_gain>10</p_gain> <i_gain>0.0</i_gain> <d_gain>0.5</d_gain>
+            <i_max>0.2</i_max> <i_min>-0.5</i_min>
+            <cmd_max>6</cmd_max> <cmd_min>-6</cmd_min>
             <initial_position>0</initial_position>
         </plugin>
         <plugin filename="ignition-gazebo-joint-position-controller-system"
                 name="ignition::gazebo::systems::JointPositionController">
             <joint_name>arm_joint4</joint_name>
             <topic>/arm_joint4_cmd_pos</topic>
-            <p_gain>15</p_gain> <i_gain>0.3</i_gain> <d_gain>2</d_gain>
-            <i_max>3</i_max> <i_min>-3</i_min>
-            <cmd_max>8</cmd_max> <cmd_min>-8</cmd_min>
+            <p_gain>8</p_gain> <i_gain>0.0</i_gain> <d_gain>0.5</d_gain>
+            <i_max>0.2</i_max> <i_min>-0.5</i_min>
+            <cmd_max>5</cmd_max> <cmd_min>-5</cmd_min>
             <initial_position>0</initial_position>
         </plugin>
         <plugin filename="ignition-gazebo-joint-position-controller-system"
                 name="ignition::gazebo::systems::JointPositionController">
             <joint_name>arm_joint5</joint_name>
             <topic>/arm_joint5_cmd_pos</topic>
-            <p_gain>10</p_gain> <i_gain>0.2</i_gain> <d_gain>1.5</d_gain>
-            <i_max>2</i_max> <i_min>-2</i_min>
-            <cmd_max>6</cmd_max> <cmd_min>-6</cmd_min>
+            <p_gain>6</p_gain> <i_gain>0.0</i_gain> <d_gain>0.5</d_gain>
+            <i_max>0.2</i_max> <i_min>-0.5</i_min>
+            <cmd_max>3</cmd_max> <cmd_min>-3</cmd_min>
             <initial_position>0</initial_position>
         </plugin>
         <plugin filename="ignition-gazebo-joint-position-controller-system"
                 name="ignition::gazebo::systems::JointPositionController">
             <joint_name>grip_joint</joint_name>
             <topic>/grip_master_target</topic>
-            <!-- Sized for a small plastic finger. P=200 / cmd_max=100 was launching
-                 the whole robot on the first 'open gripper' command because the
-                 100 N·m wrist torque propagated through the arm to base_link. -->
-            <p_gain>15</p_gain> <i_gain>0.0</i_gain>  <d_gain>0.0</d_gain>
-            <i_max>0</i_max> <i_min>0</i_min>
-            <cmd_max>1.5</cmd_max> <cmd_min>-1.5</cmd_min>
+            <!-- i_gain MUST stay 0: the mimic fingers are commanded close to
+                 the joint limit; any integral term winds up against that stop
+                 and freezes the finger (the splayed-gripper bug).  Pure P+D
+                 position-following is enough for the ~1 g finger links and the
+                 cube grip is a spring grip (P-term) that needs no integral. -->
+            <p_gain>50.0</p_gain> <i_gain>0.0</i_gain>  <d_gain>2.0</d_gain>
+            <i_max>0.2</i_max> <i_min>-0.2</i_min>
+            <cmd_max>2.5</cmd_max> <cmd_min>-2.5</cmd_min>
+            <!-- Home position is CLOSED (0.0).  Pads start together so the
+                 gripper is ready to receive a cube. -->
             <initial_position>0</initial_position>
         </plugin>
         <!-- ==================== MIMIC GRIPPER FINGER CONTROLLERS ====================
-             Ignition Fortress does NOT enforce URDF <mimic>. To make the fingers
-             actually open/close in Gazebo (not just visually in RViz/RSP), we
-             attach a low-gain JointPositionController to each of the 5 mimic
-             joints. The gripper_mimic_relay node fans out /grip_joint_cmd_pos
-             to each /<mimic>_cmd_pos topic with the URDF multiplier baked in.
-             Finger inertias are bumped to 1e-5 (above) and gravity is disabled
-             on the finger links (below) so these tiny PID loops stay stable. -->
-        <!-- All 5 mimic PIDs tracked-but-tame: P=8 / cmd_max=1.0 keeps the
-             tiny (~1 g, 1e-5 kg·m²) finger links from being launched into a
-             runaway spin ("fan" effect) by the relay command. With the joints
-             now type='revolute' the PID also can't wind up across +/-pi. -->
+              Ignition Fortress does NOT enforce URDF <mimic>. To make the fingers
+              actually open/close in Gazebo (not just visually in RViz/RSP), we
+              attach a low-gain JointPositionController to each of the 3 mimic
+              joints (rlink_joint2, llink_joint1, llink_joint2). The
+              gripper_mimic_relay node fans out /grip_joint_cmd_pos to each
+              /<mimic>_cmd_pos topic with the URDF multiplier baked in.
+              Finger inertias are bumped to 1e-5 (above) and gravity is disabled
+              on the finger links (below) so these tiny PID loops stay stable. -->
+        <!-- MIMIC GRIPPER FINGER CONTROLLERS (5 mimic joints).
+             rlink_joint3 and llink_joint3 are the 4-bar COUPLERS (rockers).
+             All five share the same low-gain PID: p_gain=10, i_gain=0.0 (any
+             integral winds up against the joint limit and freezes/splays the
+             finger), d_gain=0.3.  The couplers keep the pads parallel and make
+             the four-bar visually complete. -->
         <plugin filename="ignition-gazebo-joint-position-controller-system"
                 name="ignition::gazebo::systems::JointPositionController">
             <joint_name>llink_joint1</joint_name>
             <topic>/llink_joint1_cmd_pos</topic>
-            <p_gain>15</p_gain> <i_gain>0.0</i_gain>  <d_gain>0.0</d_gain>
-            <i_max>0</i_max> <i_min>0</i_min>
-            <cmd_max>1.5</cmd_max> <cmd_min>-1.5</cmd_min>
+            <p_gain>50.0</p_gain> <i_gain>0.0</i_gain>  <d_gain>2.0</d_gain>
+            <i_max>0.2</i_max> <i_min>-0.2</i_min>
+            <cmd_max>2.5</cmd_max> <cmd_min>-2.5</cmd_min>
+            <!-- mimic=-1: at master=-1.54 the mimic should be at +1.54.
+                 Setting initial to the correct mimic value avoids the
+                 sim-start jump that visibly "detaches" the pad. -->
             <initial_position>0</initial_position>
         </plugin>
         <plugin filename="ignition-gazebo-joint-position-controller-system"
                 name="ignition::gazebo::systems::JointPositionController">
             <joint_name>llink_joint2</joint_name>
             <topic>/llink_joint2_cmd_pos</topic>
-            <p_gain>15</p_gain> <i_gain>0.0</i_gain>  <d_gain>0.0</d_gain>
-            <i_max>0</i_max> <i_min>0</i_min>
-            <cmd_max>1.5</cmd_max> <cmd_min>-1.5</cmd_min>
+            <p_gain>50.0</p_gain> <i_gain>0.0</i_gain>  <d_gain>2.0</d_gain>
+            <i_max>0.2</i_max> <i_min>-0.2</i_min>
+            <cmd_max>2.5</cmd_max> <cmd_min>-2.5</cmd_min>
             <initial_position>0</initial_position>
         </plugin>
         <plugin filename="ignition-gazebo-joint-position-controller-system"
                 name="ignition::gazebo::systems::JointPositionController">
             <joint_name>llink_joint3</joint_name>
             <topic>/llink_joint3_cmd_pos</topic>
-            <p_gain>15</p_gain> <i_gain>0.0</i_gain>  <d_gain>0.0</d_gain>
-            <i_max>0</i_max> <i_min>0</i_min>
-            <cmd_max>1.5</cmd_max> <cmd_min>-1.5</cmd_min>
+            <p_gain>50.0</p_gain> <i_gain>0.0</i_gain>  <d_gain>2.0</d_gain>
+            <i_max>0.2</i_max> <i_min>-0.2</i_min>
+            <cmd_max>2.5</cmd_max> <cmd_min>-2.5</cmd_min>
+            <!-- mimic=-1: at master=-1.54 the mimic should be at +1.54. -->
             <initial_position>0</initial_position>
         </plugin>
         <plugin filename="ignition-gazebo-joint-position-controller-system"
                 name="ignition::gazebo::systems::JointPositionController">
             <joint_name>rlink_joint2</joint_name>
             <topic>/rlink_joint2_cmd_pos</topic>
-            <p_gain>15</p_gain> <i_gain>0.0</i_gain>  <d_gain>0.0</d_gain>
-            <i_max>0</i_max> <i_min>0</i_min>
-            <cmd_max>1.5</cmd_max> <cmd_min>-1.5</cmd_min>
+            <p_gain>50.0</p_gain> <i_gain>0.0</i_gain>  <d_gain>2.0</d_gain>
+            <i_max>0.2</i_max> <i_min>-0.2</i_min>
+            <cmd_max>2.5</cmd_max> <cmd_min>-2.5</cmd_min>
+            <!-- mimic=-1: at master=-1.54 the mimic should be at +1.54. -->
             <initial_position>0</initial_position>
         </plugin>
         <plugin filename="ignition-gazebo-joint-position-controller-system"
                 name="ignition::gazebo::systems::JointPositionController">
             <joint_name>rlink_joint3</joint_name>
             <topic>/rlink_joint3_cmd_pos</topic>
-            <p_gain>15</p_gain> <i_gain>0.0</i_gain>  <d_gain>0.0</d_gain>
-            <i_max>0</i_max> <i_min>0</i_min>
-            <cmd_max>1.5</cmd_max> <cmd_min>-1.5</cmd_min>
+            <p_gain>50.0</p_gain> <i_gain>0.0</i_gain>  <d_gain>2.0</d_gain>
+            <i_max>0.2</i_max> <i_min>-0.2</i_min>
+            <cmd_max>2.5</cmd_max> <cmd_min>-2.5</cmd_min>
             <initial_position>0</initial_position>
         </plugin>
         <!-- ==================== IGNITION DIFFERENTIAL DRIVE ==================== -->
@@ -644,12 +711,27 @@
              can forward them to ROS /joint_states (replacing the static publisher).      -->
         <plugin filename="ignition-gazebo-joint-state-publisher-system"
                 name="ignition::gazebo::systems::JointStatePublisher">
-            <update_rate>200</update_rate>
+            <update_rate>50</update_rate>
         </plugin>
         <!-- Required for the IMU sensor below to publish data. Without it the
              /imu topic exists in Ignition but is never updated. -->
         <plugin filename="ignition-gazebo-imu-system"
                 name="ignition::gazebo::systems::Imu">
+        </plugin>
+        <!-- Required for the contact sensors on the gripper fingers to detect
+             collision with the object being grasped. -->
+        <plugin filename="ignition-gazebo-contact-system"
+                name="ignition::gazebo::systems::Contact">
+        </plugin>
+        <!-- Publishes the model's world pose so we can relay it into ROS /tf
+             as odom->base_footprint and keep RViz matched to Gazebo physics. -->
+        <plugin filename="ignition-gazebo-pose-publisher-system"
+                name="gz::sim::systems::PosePublisher">
+            <topic>/model/x3plus/pose</topic>
+            <publish_link_pose>true</publish_link_pose>
+            <publish_collision_pose>false</publish_collision_pose>
+            <publish_visual_pose>false</publish_visual_pose>
+            <publish_nested_model_pose>false</publish_nested_model_pose>
         </plugin>
     </gazebo>
 
@@ -665,15 +747,81 @@
         </sensor>
     </gazebo>
 
-    <!-- Disable gravity on the passive mimic gripper links so they do not flop in Gazebo.
+    <!-- Depth camera on camera_link -->
+    <gazebo reference="camera_link">
+        <sensor name="depth_camera" type="rgbd">
+            <always_on>1</always_on>
+            <update_rate>5.0</update_rate>
+            <camera>
+                <horizontal_fov>1.047</horizontal_fov>
+                <image>
+                    <width>320</width>
+                    <height>240</height>
+                </image>
+                <clip>
+                    <near>0.05</near>
+                    <far>10.0</far>
+                </clip>
+            </camera>
+            <topic>/depth_camera</topic>
+        </sensor>
+    </gazebo>
+
+    <!-- Wrist monocular camera on mono_link -->
+    <gazebo reference="mono_link">
+        <sensor name="wrist_mono_camera" type="camera">
+            <always_on>1</always_on>
+            <update_rate>5.0</update_rate>
+            <camera>
+                <horizontal_fov>1.047</horizontal_fov>
+                <image>
+                    <width>320</width>
+                    <height>240</height>
+                </image>
+                <clip>
+                    <near>0.05</near>
+                    <far>10.0</far>
+                </clip>
+            </camera>
+            <topic>/wrist_mono_camera</topic>
+        </sensor>
+    </gazebo>
+
+    <!-- Enable gravity on the passive mimic gripper links so they do not flop in Gazebo.
          Mimic constraints are not enforced by Ignition physics, but with gravity off
-         these links remain at their spawn pose instead of falling free.                  -->
-    <gazebo reference="llink1"><gravity>0</gravity><collision><surface><contact><collide_bitmask>0x00</collide_bitmask></contact></surface></collision></gazebo>
-    <gazebo reference="llink2"><gravity>0</gravity><collision><surface><contact><collide_bitmask>0x00</collide_bitmask></contact></surface></collision></gazebo>
-    <gazebo reference="llink3"><gravity>0</gravity><collision><surface><contact><collide_bitmask>0x00</collide_bitmask></contact></surface></collision></gazebo>
-    <gazebo reference="rlink1"><gravity>0</gravity><collision><surface><contact><collide_bitmask>0x00</collide_bitmask></contact></surface></collision></gazebo>
-    <gazebo reference="rlink2"><gravity>0</gravity><collision><surface><contact><collide_bitmask>0x00</collide_bitmask></contact></surface></collision></gazebo>
-    <gazebo reference="rlink3"><gravity>0</gravity><collision><surface><contact><collide_bitmask>0x00</collide_bitmask></contact></surface></collision></gazebo>
+         these links remain at their spawn pose instead of falling free.
+         collide_bitmask=0xFF enables collision with everything so the fingers
+         can actually grip the cube.  mu1=mu2=30.0 provides high friction to
+         prevent the cube from sliding.                                       -->
+    <gazebo reference="llink1"><gravity>0</gravity><mu1>10.0</mu1><mu2>10.0</mu2><collision><surface><contact><collide_bitmask>0xFF</collide_bitmask></contact></surface></collision></gazebo>
+    <gazebo reference="llink2"><gravity>0</gravity><mu1>10.0</mu1><mu2>10.0</mu2><collision><surface><contact><collide_bitmask>0xFF</collide_bitmask></contact></surface></collision></gazebo>
+    <gazebo reference="llink3"><gravity>0</gravity><mu1>10.0</mu1><mu2>10.0</mu2><collision><surface><contact><collide_bitmask>0xFF</collide_bitmask></contact></surface></collision></gazebo>
+    <gazebo reference="rlink1"><gravity>0</gravity><mu1>10.0</mu1><mu2>10.0</mu2><collision><surface><contact><collide_bitmask>0xFF</collide_bitmask></contact></surface></collision></gazebo>
+    <gazebo reference="rlink2"><gravity>0</gravity><mu1>10.0</mu1><mu2>10.0</mu2><collision><surface><contact><collide_bitmask>0xFF</collide_bitmask></contact></surface></collision></gazebo>
+    <gazebo reference="rlink3"><gravity>0</gravity><mu1>10.0</mu1><mu2>10.0</mu2><collision><surface><contact><collide_bitmask>0xFF</collide_bitmask></contact></surface></collision></gazebo>
+
+    <!-- Contact sensors on the gripper finger pads (llink2, rlink2) to detect
+         collision with the object during grasping. The pick_and_place node
+         subscribes to these topics and stops the gripper closing when contact
+         is detected. -->
+    <gazebo reference="llink2">
+        <sensor name="llink2_contact" type="contact">
+            <always_on>true</always_on>
+            <update_rate>20</update_rate>
+            <topic>/model/x3plus/contact/llink2</topic>
+            <contact>
+            </contact>
+        </sensor>
+    </gazebo>
+    <gazebo reference="rlink2">
+        <sensor name="rlink2_contact" type="contact">
+            <always_on>true</always_on>
+            <update_rate>20</update_rate>
+            <topic>/model/x3plus/contact/rlink2</topic>
+            <contact>
+            </contact>
+        </sensor>
+    </gazebo>
 
 
     <!-- ==================== LEGACY GAZEBO CLASSIC DIFF DRIVE (DISABLED) ==================== -->

@@ -1,1 +1,1 @@
-/home/assoc/ROS2CoorAPI/robot_workspace/x3plus_ws/build/x3plus_gazebo_bringup/ament_cmake_index/share/ament_index/resource_index/package_run_dependencies/x3plus_gazebo_bringup
+ros_gz_sim;robot_state_publisher;rviz2;ament_lint_auto;ament_lint_common

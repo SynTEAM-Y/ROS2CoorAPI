@@ -1,1 +1,0 @@
-/home/assoc/ROS2CoorAPI/robot_workspace/x3plus_ws/build/astra_camera_msgs/ament_cmake_export_targets/ament_cmake_export_targets-extras.cmake

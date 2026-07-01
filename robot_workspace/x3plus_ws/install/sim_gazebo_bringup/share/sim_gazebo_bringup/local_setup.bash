@@ -1,1 +1,1 @@
-/home/assoc/ROS2CoorAPI/robot_workspace/x3plus_ws/build/sim_gazebo_bringup/ament_cmake_environment_hooks/local_setup.bash
+/home/othman/ROS2CoorAPI/robot_workspace/x3plus_ws/build/sim_gazebo_bringup/ament_cmake_environment_hooks/local_setup.bash

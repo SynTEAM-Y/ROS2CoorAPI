@@ -19,9 +19,9 @@ gap two ways:
 
 Mimic multipliers (from URDF):
   llink_joint1  = grip_joint x -1
-  llink_joint2  = grip_joint x +1
+  llink_joint2  = grip_joint x +1  (parallelogram: same sign as crank → pad stays parallel)
   llink_joint3  = grip_joint x -1
-  rlink_joint2  = grip_joint x -1
+  rlink_joint2  = grip_joint x -1  (parallelogram: opposite sign to crank → pad stays parallel)
   rlink_joint3  = grip_joint x +1
 """
 
@@ -33,12 +33,23 @@ from std_msgs.msg import Float64
 
 
 # Mimic joint -> URDF multiplier (must match yahboomcar_X3plus.urdf.xacro).
+# From the URDF (xacro file), the mimic relationships are:
+#   r_joint2:  mimic=-1  (r link2 = -grip_joint)  [pad counter-rotates → net orientation 0]
+#   l_joint1:  mimic=-1  (l link1 = -grip_joint)  [left crank mirrors right]
+#   l_joint2:  mimic=+1  (l link2 =  grip_joint)  [left pad counter-rotates]
+#   l_joint3:  mimic=-1  (l link3 = -grip_joint)  [left rocker mirrors]
+#   r_joint3:  mimic=+1  (r link3 =  grip_joint)  [right rocker parallel to crank]
+# These multipliers maintain the parallelogram 4-bar constraint:
+#   - input cranks: r link1 (master) and l link1 (mirror, mimic=-1)
+#   - output bars/pads: r link2 and l link2 (mimic=∓1) rotate OPPOSITE to
+#     their parent crank so net orientation in arm_link5 is constant → parallel pads
+#   - rockers: r link3 (mimic=+1) and l link3 (mimic=-1) parallel to the cranks
 MIMIC_MULTIPLIERS = {
-    'llink_joint1': -1.0,
-    'llink_joint2': +1.0,
-    'llink_joint3': -1.0,
-    'rlink_joint2': -1.0,
-    'rlink_joint3': +1.0,
+    'llink_joint1': -1.0,  # left crank mirrors right (mimic=-1)
+    'llink_joint2': +1.0,  # left pad (mimic=+1, opens left — mirror of right)
+    'llink_joint3': -1.0,  # left rocker mirrors (mimic=-1)
+    'rlink_joint2': -1.0,  # right pad (mimic=-1, counter-rotates to stay parallel)
+    'rlink_joint3': +1.0,  # right rocker parallel to crank (mimic=+1)
 }
 
 
@@ -46,45 +57,99 @@ class GripperMimicRelay(Node):
     def __init__(self):
         super().__init__('gripper_mimic_relay')
 
+        # Optional namespace for multi-robot operation.  When empty the node
+        # behaves exactly like the original single-robot version.  When set to
+        # e.g. "robot1" it listens/publishes on /robot1/joint_states,
+        # /robot1/grip_joint_cmd_pos, etc.
+        self.declare_parameter('namespace', '')
+        ns = self.get_parameter('namespace').value
+        self.ns = ns.rstrip('/') if ns else ''
+        self._prefix = f'/{self.ns}' if self.ns else ''
+
         # ---- 1) joint_states filter (so RSP/RViz uses URDF mimic) ----
         self.pub_js = self.create_publisher(
-            JointState, '/joint_states', qos_profile_sensor_data
+            JointState, f'{self._prefix}/joint_states', qos_profile_sensor_data
         )
         self.sub_js = self.create_subscription(
-            JointState, '/joint_states_raw', self._js_callback,
+            JointState, f'{self._prefix}/joint_states_raw', self._js_callback,
             qos_profile_sensor_data,
         )
 
         # ---- 2) grip_joint command fan-out (so Gazebo physics fingers move) ----
         # Master grip_joint controller subscribes to GZ topic /grip_master_target
         # (renamed in URDF to break the input/output cycle on /grip_joint_cmd_pos).
-        self._master_pub = self.create_publisher(Float64, '/grip_master_target', 10)
+        self._master_pub = self.create_publisher(
+            Float64, f'{self._prefix}/grip_master_target', 10)
         self._mimic_pubs = {
-            name: self.create_publisher(Float64, f'/{name}_cmd_pos', 10)
+            name: self.create_publisher(
+                Float64, f'{self._prefix}/{name}_cmd_pos', 10)
             for name in MIMIC_MULTIPLIERS
         }
         self.sub_grip_cmd = self.create_subscription(
-            Float64, '/grip_joint_cmd_pos', self._grip_cmd_callback, 10
+            Float64, f'{self._prefix}/grip_joint_cmd_pos',
+            self._grip_cmd_callback, 10
         )
-        # Rate-limited target ramp: avoids step inputs that cause PID jolt + detach.
-        self._target = 0.0      # latest user setpoint
-        self._current = 0.0     # currently published (ramped) setpoint
-        self._rate = 0.6        # rad/s ramp speed (~1 s for full open)
+        # Rate-limited target ramp: 5 rad/s (≈0.3 s for full open) is fast
+        # enough that the gripper pads reach target in well under one
+        # arm-pose segment, but smooth enough to avoid the step-input PID
+        # jolt on the JointPositionController.  Slow ramps (≤0.5 rad/s) in
+        # combination with the controller's high p_gain cause a 1-2 px
+        # "buzz" in the wrist camera as the reference creeps into the
+        # controller's dead zone.
+        #
+        # Init at GRIPPER_OPEN (-1.54) — NOT 0 — so the relay's first
+        # published command matches the URDF <initial_position> (grip_joint
+        # spawns OPEN).  Initialising at 0 (closed) yanked the gripper shut
+        # Home position is CLOSED (grip_joint = 0).  Pads start together
+        # so the gripper is ready to receive a cube immediately.
+        # Initialising at -1.54 (OPEN) would yank the gripper open the
+        # instant the relay came up, fighting the spawn pose and jolting
+        # the freshly-spawned fingers.
+        self._target = 0.0       # latest user setpoint (CLOSED at startup)
+        self._current = 0.0      # currently published (ramped) setpoint
+        self._rate = 5.0        # rad/s ramp speed (~0.3 s for full open)
         self._dt = 0.02         # 50 Hz publish
         self._timer = self.create_timer(self._dt, self._tick)
 
         self.get_logger().info(
-            'Gripper mimic relay active: '
-            '/joint_states_raw -> /joint_states (filter) and '
-            '/grip_joint_cmd_pos -> %d mimic _cmd_pos topics (fan-out)'
-            % len(self._mimic_pubs)
+            'Gripper mimic relay active [%s]: '
+            '%s/joint_states_raw -> %s/joint_states (filter) and '
+            '%s/grip_joint_cmd_pos -> %d mimic _cmd_pos topics (fan-out)'
+            % (self.ns or 'global',
+               self._prefix or '', self._prefix or '',
+               self._prefix or '', len(self._mimic_pubs))
         )
 
     def _js_callback(self, msg: JointState):
-        # Pass joint states through unchanged. The URDF no longer has <mimic>
-        # tags on the finger joints, so RSP needs the real angles reported by
-        # Ignition for every joint (including the 5 "mimic" finger joints).
-        self.pub_js.publish(msg)
+        # Strip the 5 mimic finger joints from the raw Ignition joint_states.
+        # robot_state_publisher then computes those finger positions from the
+        # actual gripper joint and the URDF <mimic> relationships.
+        filtered = JointState()
+        # The raw Ignition Model->JointState bridge leaves header.stamp at 0,
+        # which makes robot_state_publisher emit zero-stamped TF frames and
+        # breaks later lookups.  Stamp with the relay's current clock time.
+        filtered.header.stamp = self.get_clock().now().to_msg()
+        filtered.name = []
+        filtered.position = []
+        filtered.velocity = []
+        filtered.effort = []
+        ns_prefix = f'{self.ns}_' if self.ns else ''
+
+        for idx, name in enumerate(msg.name):
+            # Multi-robot: joint names are prefixed (e.g. robot_1_llink_joint1).
+            # Strip the robot namespace so mimic filtering works for any robot.
+            bare_name = name[len(ns_prefix):] if ns_prefix and name.startswith(ns_prefix) else name
+            if bare_name in MIMIC_MULTIPLIERS:
+                continue
+            filtered.name.append(name)
+            if idx < len(msg.position):
+                filtered.position.append(msg.position[idx])
+            if idx < len(msg.velocity):
+                filtered.velocity.append(msg.velocity[idx])
+            if idx < len(msg.effort):
+                filtered.effort.append(msg.effort[idx])
+
+        self.pub_js.publish(filtered)
 
     def _grip_cmd_callback(self, msg: Float64):
         # Just record latest target; ramping happens in _tick.

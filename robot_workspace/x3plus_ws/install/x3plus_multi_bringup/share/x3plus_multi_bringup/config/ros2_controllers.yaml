@@ -1,1 +1,13 @@
-/home/assoc/ROS2CoorAPI/robot_workspace/x3plus_ws/build/x3plus_multi_bringup/config/ros2_controllers.yaml
+controller_manager:
+  ros__parameters:
+    update_rate: 100
+
+    # Controller types
+    joint_state_broadcaster:
+      type: joint_state_broadcaster/JointStateBroadcaster
+
+    arm_group_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
+
+    gripper_group_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
