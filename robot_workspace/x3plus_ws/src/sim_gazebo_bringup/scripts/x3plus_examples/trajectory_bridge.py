@@ -85,7 +85,7 @@ class TrajectoryBridge(Node):
         result = FollowJointTrajectory.Result()
 
         if num == 0:
-            self.get_logger().warn(f'{label}: empty trajectory')
+            self.get_logger().warning(f'{label}: empty trajectory')
             goal_handle.succeed()
             result.error_code = result.SUCCESSFUL
             return result

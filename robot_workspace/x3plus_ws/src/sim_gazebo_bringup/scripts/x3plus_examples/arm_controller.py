@@ -251,7 +251,7 @@ class ArmController(Node):
     def execute_pick_and_place(self):
         """Launch pick and place in a background thread so the motion timer keeps running."""
         if self._pick_place_running:
-            self.get_logger().warn('Pick and place already running — ignoring')
+            self.get_logger().warning('Pick and place already running — ignoring')
             return
         # Sync the trajectory generator's internal state to the latest measured
         # joint positions so the first step doesn't see a phantom step from 0.
@@ -333,7 +333,7 @@ class ArmController(Node):
             self.get_logger().info(step_name)
             self.publish_pose(arm_pos, grip_pos)
             if not self._wait_motion_done(timeout=8.0):
-                self.get_logger().warn(f'Timeout on: {step_name}')
+                self.get_logger().warning(f'Timeout on: {step_name}')
             if post_pause > 0.0:
                 time.sleep(post_pause)
 

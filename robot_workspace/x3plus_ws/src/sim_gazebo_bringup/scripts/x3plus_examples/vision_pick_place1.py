@@ -225,7 +225,7 @@ class VisionPickPlace(Node):
         try:
             self._wrist_image = self._bridge.imgmsg_to_cv2(msg, 'bgr8')
         except Exception as e:
-            self.get_logger().warn(f'Wrist camera cv_bridge failed: {e}')
+            self.get_logger().warning(f'Wrist camera cv_bridge failed: {e}')
 
     def _on_llink2_contact(self, msg: Contacts):
         self._llink2_contact = msg
@@ -362,9 +362,9 @@ class VisionPickPlace(Node):
 
         camera_ok = self._camera_guided_approach()
         if camera_ok:
-            self.get_logger().warn('✅ Camera-guided alignment complete.')
+            self.get_logger().warning('✅ Camera-guided alignment complete.')
         else:
-            self.get_logger().warn('⚠️ Camera-guided alignment timed out or failed. Falling back.')
+            self.get_logger().warning('⚠️ Camera-guided alignment timed out or failed. Falling back.')
 
         # ── STATE: PICK (High precision grip and lift) ────────────
         self.state = self.STATE_PICK
@@ -382,11 +382,11 @@ class VisionPickPlace(Node):
         self._correct_robot_x_during_pick(obj_x_tf)
 
         # Verify distance right before lowering
-        self.get_logger().warn('═══════ DISTANCE VERIFICATION ═══════')
+        self.get_logger().warning('═══════ DISTANCE VERIFICATION ═══════')
         # ── DEPTH CAMERA DISTANCE VERIFICATION (with backup-and-reread) ─
         # Adopted from pick_and_place.py: if we ended up too close to the
         # cube, back up and re-read the depth camera before lowering.
-        self.get_logger().warn('═══════ DEPTH CAMERA DISTANCE CHECK ═══════')
+        self.get_logger().warning('═══════ DEPTH CAMERA DISTANCE CHECK ═══════')
         if self._detected_pose_map is not None:
             cube = self._detected_pose_map
             try:
@@ -402,13 +402,13 @@ class VisionPickPlace(Node):
                 dist_to_cube = math.hypot(cube_x - self._odom_x, cube_y - self._odom_y)
                 finger_center = self._gripper_center_x_at_joints(REACH_DOWN) + FK_SETTLE_COMPENSATION
                 error = dist_to_cube - finger_center
-                self.get_logger().warn(
+                self.get_logger().warning(
                     f'  Initial cam dist={dist_to_cube*1000:.1f} mm, '
                     f'target={finger_center*1000:.1f} mm, error={error*1000:.1f} mm')
 
                 if error < -0.010:
                     backup_amount = abs(error) + 0.010
-                    self.get_logger().warn(f'  Too close! Backing up {backup_amount*1000:.1f} mm')
+                    self.get_logger().warning(f'  Too close! Backing up {backup_amount*1000:.1f} mm')
                     twist = Twist()
                     twist.linear.x = -0.1
                     backup_duration = backup_amount / 0.1
@@ -425,13 +425,13 @@ class VisionPickPlace(Node):
 
                     # Re-read distance after backup
                     dist_new = math.hypot(cube_x - self._odom_x, cube_y - self._odom_y)
-                    self.get_logger().warn(
+                    self.get_logger().warning(
                         f'  After backup: dist={dist_new*1000:.1f} mm, '
                         f'error={(dist_new - finger_center)*1000:.1f} mm')
                 else:
-                    self.get_logger().warn('  ✅ Distance OK, no backup needed')
+                    self.get_logger().warning('  ✅ Distance OK, no backup needed')
             except Exception as e:
-                self.get_logger().warn(f'  Distance verification failed: {e}')
+                self.get_logger().warning(f'  Distance verification failed: {e}')
 
         # REACH DOWN
         self._move_arm(REACH_DOWN, 'reach_down', duration_sec=2.0)
@@ -442,14 +442,14 @@ class VisionPickPlace(Node):
         # Adopted from pick_and_place.py. Looks up the actual arm_link5 pose
         # via TF, applies the calibrated ARM5_TO_GRIP_CENTER offset, then
         # closed-loop drives the base to align finger centre with cube.
-        self.get_logger().warn('═══════ TF-BASED FK CALIBRATION ═══════')
+        self.get_logger().warning('═══════ TF-BASED FK CALIBRATION ═══════')
         fk_finger_base = self._gripper_center_x_at_joints(REACH_DOWN)
-        self.get_logger().warn(f'  FK-predicted finger_center_base = {fk_finger_base:.5f} m')
+        self.get_logger().warning(f'  FK-predicted finger_center_base = {fk_finger_base:.5f} m')
 
         # Log actual arm joints after REACH_DOWN
         if self._joint_state is not None:
             js = {n: p for n, p in zip(self._joint_state.name, self._joint_state.position)}
-            self.get_logger().warn(
+            self.get_logger().warning(
                 f'  /joint_states: '
                 f'[{js.get("arm_joint1",0):.3f}, {js.get("arm_joint2",0):.3f}, '
                 f'{js.get("arm_joint3",0):.3f}, {js.get("arm_joint4",0):.3f}, '
@@ -465,7 +465,7 @@ class VisionPickPlace(Node):
                 arm5_x = t.transform.translation.x
                 arm5_z = t.transform.translation.z
                 actual_finger_base = arm5_x + ARM5_TO_GRIP_CENTER
-                self.get_logger().warn(
+                self.get_logger().warning(
                     f'  TF arm_link5: x={arm5_x:.5f} z={arm5_z:.5f} → '
                     f'finger_center_x={actual_finger_base:.5f} m')
                 # Log finger TFs for diagnostics
@@ -474,21 +474,21 @@ class VisionPickPlace(Node):
                         ft = self._tf_buffer.lookup_transform(
                             'base_link', finger, rclpy.time.Time(),
                             rclpy.duration.Duration(seconds=0.2))
-                        self.get_logger().warn(
+                        self.get_logger().warning(
                             f'  TF {finger}: x={ft.transform.translation.x:.4f} '
                             f'z={ft.transform.translation.z:.4f}')
                     except Exception:
                         pass
                 break
             except Exception as e:
-                self.get_logger().warn(f'  TF lookup attempt {attempt+1} failed: {e}')
+                self.get_logger().warning(f'  TF lookup attempt {attempt+1} failed: {e}')
                 time.sleep(0.2)
 
         if actual_finger_base is None:
-            self.get_logger().warn('  ⚠️  TF unavailable, falling back to FK')
+            self.get_logger().warning('  ⚠️  TF unavailable, falling back to FK')
             actual_finger_base = fk_finger_base
         else:
-            self.get_logger().warn(
+            self.get_logger().warning(
                 f'  FK error = {(actual_finger_base - fk_finger_base)*1000:.1f} mm')
 
         cube_world_x = self._object_pose_map.pose.position.x
@@ -496,19 +496,19 @@ class VisionPickPlace(Node):
             t = self._tf_buffer.lookup_transform(
                 'odom', 'test_block', rclpy.time.Time(), rclpy.duration.Duration(seconds=0.5))
             cube_world_x = t.transform.translation.x
-            self.get_logger().warn(f'  Cube TF (odom): x={cube_world_x:.5f}')
+            self.get_logger().warning(f'  Cube TF (odom): x={cube_world_x:.5f}')
         except Exception:
             pass
 
         finger_world = self._odom_x + actual_finger_base
         error = finger_world - cube_world_x
-        self.get_logger().warn(
+        self.get_logger().warning(
             f'  odom_x={self._odom_x:.5f} finger_world={finger_world:.5f} '
             f'cube_world={cube_world_x:.5f} error={error*1000:.1f} mm')
 
         # ── CENTER GRIPPER ON CUBE (robot-frame forward; yaw-aware) ──
         if abs(error) < POSITION_TOLERANCE_M:
-            self.get_logger().warn('  ✅ Already centred — no move needed')
+            self.get_logger().warning('  ✅ Already centred — no move needed')
         else:
             # Robot is now facing the cube (yaw aligned in APPROACH). Drive
             # forward/backward in the *robot* frame and project onto the
@@ -541,7 +541,7 @@ class VisionPickPlace(Node):
                 self._publish_cmd_vel(twist)
                 time.sleep(0.05)
             time.sleep(0.3)
-            self.get_logger().warn(
+            self.get_logger().warning(
                 f'  After: odom=({self._odom_x:.3f},{self._odom_y:.3f}) '
                 f'yaw={math.degrees(self._odom_yaw):.1f}°')
 
@@ -557,7 +557,7 @@ class VisionPickPlace(Node):
         if grasped:
             self.get_logger().info('✅ GRASP CONFIRMED - Object secured')
         else:
-            self.get_logger().warn('⚠️ Pickup not confirmed by physics. Lifting anyway.')
+            self.get_logger().warning('⚠️ Pickup not confirmed by physics. Lifting anyway.')
 
         # Lift
         self.get_logger().info('═══════ LIFT SEQUENCE ═══════')
@@ -746,7 +746,7 @@ class VisionPickPlace(Node):
         while self._detected_pose_map is None and time.monotonic() < deadline:
             rclpy.spin_once(self, timeout_sec=0.1)
         if self._detected_pose_map is None:
-            self.get_logger().warn('Camera guided: no detection available')
+            self.get_logger().warning('Camera guided: no detection available')
             return False
 
         cube = self._detected_pose_map
@@ -760,7 +760,7 @@ class VisionPickPlace(Node):
         yaw_err = self._normalize_angle(target_yaw - self._odom_yaw)
 
         if abs(yaw_err) > 0.05:
-            self.get_logger().warn('Fine-guided Face Cube Yaw Alignment')
+            self.get_logger().warning('Fine-guided Face Cube Yaw Alignment')
             twist = Twist()
             yaw_deadline = time.monotonic() + 15.0
             while time.monotonic() < yaw_deadline:

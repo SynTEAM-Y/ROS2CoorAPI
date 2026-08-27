@@ -71,7 +71,7 @@ class ObjectNavigator(Node):
                 self._target_frame, msg.header.frame_id,
                 rclpy.time.Time(), rclpy.time.Duration(seconds=1.0))
         except Exception as e:
-            self.get_logger().warn(f'TF lookup failed: {e}')
+            self.get_logger().warning(f'TF lookup failed: {e}')
             return
 
         pose_map = tf2_geometry_msgs.do_transform_pose_stamped(msg, t)

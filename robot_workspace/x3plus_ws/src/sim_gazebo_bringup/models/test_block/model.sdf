@@ -40,8 +40,13 @@
         <surface>
           <friction>
             <ode>
-              <mu>100.0</mu>
-              <mu2>100.0</mu2>
+              <!-- mu=3 (was 100): the old value was a glue-era "grip
+                   assist" that also WELDED the cube to the platform
+                   (0.2 N weight * mu 100 = 20 N of holding friction the
+                   pads had to overcome to lift).  mu=3 still grips well
+                   in the mu=10 pads but breaks free from the floor. -->
+              <mu>3.0</mu>
+              <mu2>3.0</mu2>
             </ode>
           </friction>
           <contact>

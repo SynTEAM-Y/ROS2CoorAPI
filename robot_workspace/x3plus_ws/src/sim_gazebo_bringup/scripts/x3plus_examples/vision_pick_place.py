@@ -273,7 +273,7 @@ class VisionPickPlace(Node):
             self._detected_pose_map = pose_odom
             return
         except Exception as e:
-            self.get_logger().warn(
+            self.get_logger().warning(
                 f'TF camera->odom failed (frame_id={msg.header.frame_id}): {e}')
 
         try:
@@ -283,7 +283,7 @@ class VisionPickPlace(Node):
             pose_map = tf2_geometry_msgs.do_transform_pose_stamped(msg, cam_to_map)
             self._detected_pose_map = pose_map
         except Exception as e:
-            self.get_logger().warn(
+            self.get_logger().warning(
                 f'TF camera->map failed (frame_id={msg.header.frame_id}): {e}')
 
     def _on_wrist_image(self, msg: Image):
@@ -292,7 +292,7 @@ class VisionPickPlace(Node):
         try:
             self._wrist_image = self._bridge.imgmsg_to_cv2(msg, 'bgr8')
         except Exception as e:
-            self.get_logger().warn(f'Wrist camera cv_bridge failed: {e}')
+            self.get_logger().warning(f'Wrist camera cv_bridge failed: {e}')
 
     def _on_llink2_contact(self, msg: Contacts):
         self._llink2_contact = msg
@@ -347,7 +347,7 @@ class VisionPickPlace(Node):
                 break
 
             if time.monotonic() - tf_deadline + wait_timeout > 5.0:
-                self.get_logger().warn(f'[INIT] Waiting for TF frames: {missing}...')
+                self.get_logger().warning(f'[INIT] Waiting for TF frames: {missing}...')
             time.sleep(0.5)
 
         # Check which frames we actually have
@@ -356,20 +356,20 @@ class VisionPickPlace(Node):
             self._tf_buffer.lookup_transform('odom', 'base_footprint', Time(), Duration(seconds=0.1))
             self.get_logger().info('[INIT] odom→base_footprint TF OK')
         except Exception:
-            self.get_logger().warn('[INIT] odom→base_footprint TF NOT AVAILABLE - using wheel odom')
+            self.get_logger().warning('[INIT] odom→base_footprint TF NOT AVAILABLE - using wheel odom')
 
         try:
             self._tf_buffer.lookup_transform('camera_link', 'odom', Time(), Duration(seconds=0.1))
             self.get_logger().info('[INIT] camera_link→odom TF OK')
         except Exception:
-            self.get_logger().warn('[INIT] camera_link→odom TF NOT AVAILABLE - detected poses stay in camera frame')
+            self.get_logger().warning('[INIT] camera_link→odom TF NOT AVAILABLE - detected poses stay in camera frame')
 
         if use_gt_tf:
             try:
                 self._tf_buffer.lookup_transform('odom', 'test_block', Time(), Duration(seconds=0.1))
                 self.get_logger().info('[INIT] odom→test_block TF OK - will use for navigation')
             except Exception:
-                self.get_logger().warn('[INIT] odom→test_block TF NOT AVAILABLE - will use detected pose for navigation')
+                self.get_logger().warning('[INIT] odom→test_block TF NOT AVAILABLE - will use detected pose for navigation')
 
         # ── STATE: IDLE ─────────────────────────────────────────────
         self.state = self.STATE_IDLE
@@ -389,7 +389,7 @@ class VisionPickPlace(Node):
                 if age < 3.0:
                     break
             if time.monotonic() - last_log > 10.0:
-                self.get_logger().warn(
+                self.get_logger().warning(
                     f'[DETECT] Waiting for cube... elapsed={time.monotonic() - (deadline - 180.0):.0f}s')
                 last_log = time.monotonic()
             time.sleep(0.1)
@@ -457,11 +457,11 @@ class VisionPickPlace(Node):
         if pixel_x is not None:
             pos1_deg = 0.2128 * pixel_x + 21.91
             j1_rad = (pos1_deg - 90.0) * math.pi / 180.0
-            self.get_logger().warn(
+            self.get_logger().warning(
                 f'  Pixel=({pixel_x:.0f},{pixel_y:.0f}) → j1={pos1_deg:.1f}° ({j1_rad:.3f} rad)')
         else:
             j1_rad = 0.0
-            self.get_logger().warn('  No pixel data — using j1=0')
+            self.get_logger().warning('  No pixel data — using j1=0')
 
         pick_approach = [j1_rad, -1.449, -0.524, -0.908, 0.0]
         self._move_arm(pick_approach, 'mfr_pick_approach', duration_sec=3.0)
@@ -496,13 +496,13 @@ class VisionPickPlace(Node):
             self.get_logger().info('✅ GRASP CONFIRMED')
             grasped = True
         else:
-            self.get_logger().warn('⚠️ Grasp failed — retrying with fresh pixel read')
+            self.get_logger().warning('⚠️ Grasp failed — retrying with fresh pixel read')
             # Re-read pixel position before retry (cube may have shifted)
             pixel_x2, pixel_y2 = self._get_cube_pixel()
             if pixel_x2 is not None:
                 pos1_deg2 = 0.2128 * pixel_x2 + 21.91
                 j1_rad2 = (pos1_deg2 - 90.0) * math.pi / 180.0
-                self.get_logger().warn(
+                self.get_logger().warning(
                     f'  Retry pixel=({pixel_x2:.0f},{pixel_y2:.0f}) → j1={pos1_deg2:.1f}°')
                 pick_approach[0] = j1_rad2
             self._gripper_open()
@@ -812,7 +812,7 @@ class VisionPickPlace(Node):
                 return lifted
             except Exception:
                 time.sleep(0.1)
-        self.get_logger().warn(
+        self.get_logger().warning(
             '  Cube TF unavailable for lift check — trying contact-sensor fallback')
         # Fallback: if BOTH finger pads report active contact the cube is
         # almost certainly between the fingers (empty-air close = no contact).
@@ -828,7 +828,7 @@ class VisionPickPlace(Node):
             self.get_logger().info(
                 '  Both finger contacts active → assuming cube is grasped')
             return True
-        self.get_logger().warn('  No contact on one or both fingers — NOT grasped')
+        self.get_logger().warning('  No contact on one or both fingers — NOT grasped')
         return False
 
     def _compensate_arm_joint1_for_cube_center(self):
@@ -840,10 +840,10 @@ class VisionPickPlace(Node):
         This compensates for the camera-to-gripper parallax offset.
         """
         if not CV_AVAILABLE or self._bridge is None:
-            self.get_logger().warn('  j1 compensation skipped: cv_bridge unavailable')
+            self.get_logger().warning('  j1 compensation skipped: cv_bridge unavailable')
             return
 
-        self.get_logger().warn('═══════ ARM J1 COMPENSATION (ROS1-style) ══════')
+        self.get_logger().warning('═══════ ARM J1 COMPENSATION (ROS1-style) ══════')
 
         # Get latest wrist camera frame
         for _ in range(10):
@@ -852,7 +852,7 @@ class VisionPickPlace(Node):
                 break
 
         if self._wrist_image is None:
-            self.get_logger().warn('  No wrist camera frame — skipping j1 compensation')
+            self.get_logger().warning('  No wrist camera frame — skipping j1 compensation')
             return
 
         try:
@@ -861,7 +861,7 @@ class VisionPickPlace(Node):
             contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             large = [c for c in contours if cv2.contourArea(c) >= VISION_MIN_AREA]
             if not large:
-                self.get_logger().warn('  No cube in wrist view — skipping j1 compensation')
+                self.get_logger().warning('  No cube in wrist view — skipping j1 compensation')
                 return
 
             largest = max(large, key=cv2.contourArea)
@@ -870,7 +870,7 @@ class VisionPickPlace(Node):
             width = self._wrist_image.shape[1]
             img_cx = width // 2  # 320
 
-            self.get_logger().warn(f'  Cube pixel_x={cube_px} (center={img_cx})')
+            self.get_logger().warning(f'  Cube pixel_x={cube_px} (center={img_cx})')
 
             # ROS1 linear mapping: [320, 90] → [343.5, 95] in degrees
             # a = (95-90)/(343.5-320) = 5/23.5 ≈ 0.2128
@@ -880,7 +880,7 @@ class VisionPickPlace(Node):
             # Convert to URDF radians: (deg-90)*π/180
             j1_comp = (pos1_deg - 90.0) * math.pi / 180.0
 
-            self.get_logger().warn(f'  j1 compensation: {j1_comp*180/math.pi:+.2f}° (URDF rad)')
+            self.get_logger().warning(f'  j1 compensation: {j1_comp*180/math.pi:+.2f}° (URDF rad)')
 
             # Apply: move arm to REACH_DOWN with compensated j1
             compensated = list(REACH_DOWN)
@@ -889,7 +889,7 @@ class VisionPickPlace(Node):
             time.sleep(0.3)
 
         except Exception as e:
-            self.get_logger().warn(f'  j1 compensation error: {e}')
+            self.get_logger().warning(f'  j1 compensation error: {e}')
 
     def _tf_center_gripper_on_cube(self, timeout=20.0):
         """Closed-loop TF-based centering: align gripper centre onto cube.
@@ -899,7 +899,7 @@ class VisionPickPlace(Node):
         forward + lateral offset in the robot frame, and drives the base to
         eliminate both.  Runs until convergence or timeout.
         """
-        self.get_logger().warn('═══════ TF-BASED GRIPPER CENTERING ═══════')
+        self.get_logger().warning('═══════ TF-BASED GRIPPER CENTERING ═══════')
 
         t0 = time.monotonic()
         last_log = 0.0
@@ -916,14 +916,14 @@ class VisionPickPlace(Node):
                 cube_x = tc.transform.translation.x
                 cube_y = tc.transform.translation.y
             except Exception:
-                self.get_logger().warn('  Cube TF unavailable — retrying')
+                self.get_logger().warning('  Cube TF unavailable — retrying')
                 time.sleep(0.1)
                 continue
 
             # Finger centre TF
             finger_x, finger_y, finger_src = self._get_finger_center_x()
             if finger_src != 'finger_TF':
-                self.get_logger().warn(
+                self.get_logger().warning(
                     f'  Finger TF unavailable (src={finger_src}) — retrying')
                 time.sleep(0.1)
                 continue
@@ -954,7 +954,7 @@ class VisionPickPlace(Node):
             if abs(forward_err) < 0.005 and abs(lateral_err) < 0.003:
                 converge_count += 1
                 if converge_count >= required_converge:
-                    self.get_logger().warn(
+                    self.get_logger().warning(
                         f'  ✅ TF centering converged '
                         f'(fwd={forward_err*1000:+.1f}mm, lat={lateral_err*1000:+.1f}mm)')
                     break
@@ -991,7 +991,7 @@ class VisionPickPlace(Node):
         if needed, but NO rotation (which would break lateral alignment on a
         skid-steer robot).
         """
-        self.get_logger().warn('═══════ FORWARD DISTANCE CHECK ═══════')
+        self.get_logger().warning('═══════ FORWARD DISTANCE CHECK ═══════')
 
         for _ in range(5):
             rclpy.spin_once(self, timeout_sec=0.05)
@@ -1003,12 +1003,12 @@ class VisionPickPlace(Node):
                 cube_x = t.transform.translation.x
                 cube_y = t.transform.translation.y
             except Exception:
-                self.get_logger().warn('  TF cube unavailable')
+                self.get_logger().warning('  TF cube unavailable')
                 return
 
             finger_x, finger_y, finger_src = self._get_finger_center_x()
             if finger_src != 'finger_TF':
-                self.get_logger().warn(f'  Finger TF unavailable (src={finger_src})')
+                self.get_logger().warning(f'  Finger TF unavailable (src={finger_src})')
                 return
 
             # Finger world position (full 2D transform)
@@ -1021,12 +1021,12 @@ class VisionPickPlace(Node):
             forward_err = dx * math.cos(self._odom_yaw) + dy * math.sin(self._odom_yaw)
             lateral_err = -dx * math.sin(self._odom_yaw) + dy * math.cos(self._odom_yaw)
 
-            self.get_logger().warn(
+            self.get_logger().warning(
                 f'  [iter={iteration}] forward={forward_err*1000:+.1f}mm  '
                 f'lateral={lateral_err*1000:+.1f}mm')
 
             if abs(forward_err) < 0.008:
-                self.get_logger().warn('  ✅ Forward distance OK')
+                self.get_logger().warning('  ✅ Forward distance OK')
                 return
 
             # Only correct forward — NO rotation
@@ -1037,7 +1037,7 @@ class VisionPickPlace(Node):
             self._publish_cmd_vel(Twist())
             time.sleep(0.15)
 
-        self.get_logger().warn('  ⚠️ Forward check finished')
+        self.get_logger().warning('  ⚠️ Forward check finished')
 
     def _wait_for_pick_condition(self, timeout=30.0):
         """Wait until the cube meets the manufacturer pick condition.
@@ -1051,11 +1051,11 @@ class VisionPickPlace(Node):
         Returns True if condition met, False if timeout.
         """
         if not CV_AVAILABLE or self._bridge is None:
-            self.get_logger().warn('  _wait_for_pick_condition: cv_bridge unavailable')
+            self.get_logger().warning('  _wait_for_pick_condition: cv_bridge unavailable')
             return False
 
-        self.get_logger().warn('═══════ WAITING FOR PICK CONDITION ═══════')
-        self.get_logger().warn('  Target: abs(pixel_x - 320) < 10 AND pixel_y > 440')
+        self.get_logger().warning('═══════ WAITING FOR PICK CONDITION ═══════')
+        self.get_logger().warning('  Target: abs(pixel_x - 320) < 10 AND pixel_y > 440')
 
         t0 = time.monotonic()
         last_log = 0.0
@@ -1092,7 +1092,7 @@ class VisionPickPlace(Node):
                 if abs(px - 320) < 10 and py > 440:
                     consecutive_good += 1
                     if consecutive_good >= 3:
-                        self.get_logger().warn(
+                        self.get_logger().warning(
                             f'  ✅ PICK CONDITION MET: pixel=({px},{py})')
                         return True
                 else:
@@ -1101,7 +1101,7 @@ class VisionPickPlace(Node):
             except Exception:
                 consecutive_good = 0
 
-        self.get_logger().warn(f'  ⚠️ Pick condition timeout after {timeout}s')
+        self.get_logger().warning(f'  ⚠️ Pick condition timeout after {timeout}s')
         return False
 
     def _get_cube_pixel(self):
@@ -1178,7 +1178,7 @@ class VisionPickPlace(Node):
         to eliminate it.  A short forward re-approach follows each rotation to
         restore the correct stand-off distance.
         """
-        self.get_logger().warn('═══════ LATERAL GRIPPER CENTERING (TF) ═══════')
+        self.get_logger().warning('═══════ LATERAL GRIPPER CENTERING (TF) ═══════')
 
         for _ in range(5):
             rclpy.spin_once(self, timeout_sec=0.05)
@@ -1192,13 +1192,13 @@ class VisionPickPlace(Node):
                 cube_x = t.transform.translation.x
                 cube_y = t.transform.translation.y
             except Exception as e:
-                self.get_logger().warn(f'  TF cube lookup failed: {e}')
+                self.get_logger().warning(f'  TF cube lookup failed: {e}')
                 return
 
             # Get finger centre from TF
             finger_x, finger_y, finger_src = self._get_finger_center_x()
             if finger_src != 'finger_TF':
-                self.get_logger().warn(
+                self.get_logger().warning(
                     f'  Finger TF unavailable (src={finger_src}), skipping lateral centering')
                 return
 
@@ -1212,12 +1212,12 @@ class VisionPickPlace(Node):
             lateral = -dx * math.sin(self._odom_yaw) + dy * math.cos(self._odom_yaw)
             forward_err = dx * math.cos(self._odom_yaw) + dy * math.sin(self._odom_yaw)
 
-            self.get_logger().warn(
+            self.get_logger().warning(
                 f'  [iter={iteration}] lateral={lateral*1000:+.1f}mm  '
                 f'forward={forward_err*1000:+.1f}mm  finger_src={finger_src}')
 
             if abs(lateral) < 0.003 and abs(forward_err) < 0.008:
-                self.get_logger().warn('  ✅ Lateral centering converged')
+                self.get_logger().warning('  ✅ Lateral centering converged')
                 return
 
             # Rotate toward cube to correct lateral offset — small, precise pulses
@@ -1251,7 +1251,7 @@ class VisionPickPlace(Node):
                     self._publish_cmd_vel(Twist())
                     time.sleep(0.15)
 
-        self.get_logger().warn('  ⚠️ Lateral centering timed out')
+        self.get_logger().warning('  ⚠️ Lateral centering timed out')
 
     def _verify_and_correct_gripper_position(self):
         """After camera alignment, verify gripper-to-cube distance using TF and correct if needed.
@@ -1270,9 +1270,9 @@ class VisionPickPlace(Node):
         try:
             t_c = self._tf_buffer.lookup_transform('odom', 'test_block', Time(), Duration(seconds=0.3))
             cube_x, cube_y = t_c.transform.translation.x, t_c.transform.translation.y
-            self.get_logger().warn(f'  TF cube position: ({cube_x:.4f},{cube_y:.4f})')
+            self.get_logger().warning(f'  TF cube position: ({cube_x:.4f},{cube_y:.4f})')
         except Exception as e:
-            self.get_logger().warn(f'  TF cube lookup failed: {e}')
+            self.get_logger().warning(f'  TF cube lookup failed: {e}')
             return
 
         finger_x, finger_y, finger_src = None, None, 'none'
@@ -1283,14 +1283,14 @@ class VisionPickPlace(Node):
                 break
 
         if finger_x is None or cube_x is None:
-            self.get_logger().warn('  Cannot verify - no finger/cube TF')
+            self.get_logger().warning('  Cannot verify - no finger/cube TF')
             return
 
         finger_world_x = self._odom_x + finger_x * math.cos(self._odom_yaw) - finger_y * math.sin(self._odom_yaw)
         finger_world_y = self._odom_y + finger_x * math.sin(self._odom_yaw) + finger_y * math.cos(self._odom_yaw)
         dist_to_cube = math.hypot(cube_x - finger_world_x, cube_y - finger_world_y)
 
-        self.get_logger().warn(
+        self.get_logger().warning(
             f'  Distance check: finger_base={finger_x:.4f}m  '
             f'dist={dist_to_cube*1000:.0f}mm  src={finger_src}')
 
@@ -1303,7 +1303,7 @@ class VisionPickPlace(Node):
 
         if dist_to_cube > target_dist + tolerance:
             correction = dist_to_cube - target_dist
-            self.get_logger().warn(f'  Gripper too far from cube by {correction*1000:.0f}mm - correcting forward')
+            self.get_logger().warning(f'  Gripper too far from cube by {correction*1000:.0f}mm - correcting forward')
             twist = Twist()
             twist.linear.x = min(0.15, correction * 1.5)
             deadline = time.monotonic() + 3.0
@@ -1322,10 +1322,10 @@ class VisionPickPlace(Node):
                 self._publish_cmd_vel(twist)
                 time.sleep(0.05)
             self._publish_cmd_vel(Twist())
-            self.get_logger().warn(f'  Forward correction done. Final dist: {dist_to_cube*1000:.0f}mm')
+            self.get_logger().warning(f'  Forward correction done. Final dist: {dist_to_cube*1000:.0f}mm')
         elif dist_to_cube < target_dist - tolerance:
             correction = target_dist - dist_to_cube
-            self.get_logger().warn(f'  Gripper too close to cube by {correction*1000:.0f}mm - backing up')
+            self.get_logger().warning(f'  Gripper too close to cube by {correction*1000:.0f}mm - backing up')
             twist = Twist()
             twist.linear.x = -min(0.10, correction * 1.5)
             deadline = time.monotonic() + 3.0
@@ -1344,9 +1344,9 @@ class VisionPickPlace(Node):
                 self._publish_cmd_vel(twist)
                 time.sleep(0.05)
             self._publish_cmd_vel(Twist())
-            self.get_logger().warn(f'  Back up done. Final dist: {dist_to_cube*1000:.0f}mm')
+            self.get_logger().warning(f'  Back up done. Final dist: {dist_to_cube*1000:.0f}mm')
         else:
-            self.get_logger().warn(f'  ✅ Gripper well positioned: dist={dist_to_cube*1000:.0f}mm (target ~20mm)')
+            self.get_logger().warning(f'  ✅ Gripper well positioned: dist={dist_to_cube*1000:.0f}mm (target ~20mm)')
 
     def _final_gripper_micro_center(self):
         """One last precise lateral adjustment right before gripper closes.
@@ -1354,7 +1354,7 @@ class VisionPickPlace(Node):
         Reads finger-centre and cube TF, computes lateral offset, and applies
         a small rotation + forward nudge to get within 2 mm.
         """
-        self.get_logger().warn('═══════ FINAL MICRO-CENTER (2 mm) ═══════')
+        self.get_logger().warning('═══════ FINAL MICRO-CENTER (2 mm) ═══════')
 
         for _ in range(5):
             rclpy.spin_once(self, timeout_sec=0.05)
@@ -1379,11 +1379,11 @@ class VisionPickPlace(Node):
             lateral = -dx * math.sin(self._odom_yaw) + dy * math.cos(self._odom_yaw)
             forward_err = dx * math.cos(self._odom_yaw) + dy * math.sin(self._odom_yaw)
 
-            self.get_logger().warn(
+            self.get_logger().warning(
                 f'  lateral={lateral*1000:+.1f}mm  forward={forward_err*1000:+.1f}mm')
 
             if abs(lateral) < 0.002 and abs(forward_err) < 0.005:
-                self.get_logger().warn('  ✅ Micro-center converged')
+                self.get_logger().warning('  ✅ Micro-center converged')
                 return
 
             # Tiny rotation pulse
@@ -1405,7 +1405,7 @@ class VisionPickPlace(Node):
                 self._publish_cmd_vel(Twist())
                 time.sleep(0.1)
 
-        self.get_logger().warn('  ⚠️ Micro-center finished (may not fully converge)')
+        self.get_logger().warning('  ⚠️ Micro-center finished (may not fully converge)')
 
     def _verify_pickup(self, obj_map):
         if self._joint_state is not None:
@@ -1507,7 +1507,7 @@ class VisionPickPlace(Node):
             cube_in_odom = tf2_geometry_msgs.do_transform_pose_stamped(cube, t)
             return cube_in_odom.pose.position.x, cube_in_odom.pose.position.y
         except Exception as e:
-            self.get_logger().warn(f'_cube_in_odom: TF lookup failed: {e}')
+            self.get_logger().warning(f'_cube_in_odom: TF lookup failed: {e}')
             return None, None
 
     def _drive_to_face_cube(self, target_x, target_y, stop_dist=0.30, timeout=45.0):
@@ -1516,7 +1516,7 @@ class VisionPickPlace(Node):
         Uses TF ground truth for reliable positioning. Stops at stop_dist
         from the cube with the robot heading aligned toward it.
         """
-        self.get_logger().warn('═══════ DRIVE TO FACE CUBE ═══════')
+        self.get_logger().warning('═══════ DRIVE TO FACE CUBE ═══════')
 
         deadline = time.monotonic() + timeout
         last_log = 0.0
@@ -1538,7 +1538,7 @@ class VisionPickPlace(Node):
             dist = math.hypot(dx, dy)
 
             if dist <= stop_dist:
-                self.get_logger().warn(
+                self.get_logger().warning(
                     f'  ✅ Arrived: dist={dist:.2f}m (stop={stop_dist:.2f}m)')
                 break
 
@@ -1581,11 +1581,11 @@ class VisionPickPlace(Node):
         laterally aligned with the cube when the pick sequence executes.
         """
         if not CV_AVAILABLE or self._bridge is None:
-            self.get_logger().warn('  _wrist_camera_align: cv_bridge unavailable')
+            self.get_logger().warning('  _wrist_camera_align: cv_bridge unavailable')
             return False
 
-        self.get_logger().warn('═══════ WRIST CAMERA ALIGNMENT ═══════')
-        self.get_logger().warn('  Target: abs(pixel_x - 320) < 15')
+        self.get_logger().warning('═══════ WRIST CAMERA ALIGNMENT ═══════')
+        self.get_logger().warning('  Target: abs(pixel_x - 320) < 15')
 
         t0 = time.monotonic()
         last_log = 0.0
@@ -1616,7 +1616,7 @@ class VisionPickPlace(Node):
             if abs(cx_err) < 15:
                 consecutive_good += 1
                 if consecutive_good >= 3:
-                    self.get_logger().warn(
+                    self.get_logger().warning(
                         f'  ✅ Cube centered: pixel_x={pixel_x}')
                     self._publish_cmd_vel(Twist())
                     return True
@@ -1629,7 +1629,7 @@ class VisionPickPlace(Node):
             self._publish_cmd_vel(twist)
             time.sleep(0.05)
 
-        self.get_logger().warn(f'  ⚠️ Wrist camera alignment timeout')
+        self.get_logger().warning(f'  ⚠️ Wrist camera alignment timeout')
         self._publish_cmd_vel(Twist())
         return False
 
@@ -1647,11 +1647,11 @@ class VisionPickPlace(Node):
         Stops when pick condition met: abs(pixel_x - 320) < 10 AND pixel_y > 440
         """
         if not CV_AVAILABLE or self._bridge is None:
-            self.get_logger().warn('  _pixel_pid_navigate: cv_bridge unavailable')
+            self.get_logger().warning('  _pixel_pid_navigate: cv_bridge unavailable')
             return False
 
-        self.get_logger().warn('═══════ PIXEL PID NAVIGATION ═══════')
-        self.get_logger().warn('  Target: abs(pixel_x - 320) < 10 AND pixel_y > 440')
+        self.get_logger().warning('═══════ PIXEL PID NAVIGATION ═══════')
+        self.get_logger().warning('  Target: abs(pixel_x - 320) < 10 AND pixel_y > 440')
 
         t0 = time.monotonic()
         last_log = 0.0
@@ -1699,7 +1699,7 @@ class VisionPickPlace(Node):
                 if abs(px - 320) < 10 and py > 440:
                     consecutive_good += 1
                     if consecutive_good >= 3:
-                        self.get_logger().warn(
+                        self.get_logger().warning(
                             f'  ✅ Pick condition MET: pixel=({px},{py})')
                         self._publish_cmd_vel(Twist())
                         return True
@@ -1727,11 +1727,11 @@ class VisionPickPlace(Node):
 
             except Exception as e:
                 if time.monotonic() - last_log > 1.0:
-                    self.get_logger().warn(f'  Navigation error: {e}')
+                    self.get_logger().warning(f'  Navigation error: {e}')
                     last_log = time.monotonic()
                 self._publish_cmd_vel(Twist())
 
-        self.get_logger().warn(f'  ⚠️ Pixel PID navigation timeout after {timeout}s')
+        self.get_logger().warning(f'  ⚠️ Pixel PID navigation timeout after {timeout}s')
         self._publish_cmd_vel(Twist())
         return False
 
@@ -1743,7 +1743,7 @@ class VisionPickPlace(Node):
         the servo loop would lose TF mid-turn and abort with the robot
         facing the wrong direction.
         """
-        self.get_logger().warn('═══════ PRE-APPROACH YAW ALIGNMENT ═══════')
+        self.get_logger().warning('═══════ PRE-APPROACH YAW ALIGNMENT ═══════')
 
         # Get cube position from GT TF
         cube_x, cube_y = None, None
@@ -1759,10 +1759,10 @@ class VisionPickPlace(Node):
                 pass
 
         if cube_x is None:
-            self.get_logger().warn('  Cube TF unavailable — skipping yaw alignment')
+            self.get_logger().warning('  Cube TF unavailable — skipping yaw alignment')
             return
 
-        self.get_logger().warn(
+        self.get_logger().warning(
             f'  cube=({cube_x:.3f},{cube_y:.3f})  '
             f'robot=({self._odom_x:.3f},{self._odom_y:.3f})  '
             f'yaw={math.degrees(self._odom_yaw):.0f}°')
@@ -1794,7 +1794,7 @@ class VisionPickPlace(Node):
                 last_log = time.monotonic()
 
             if abs(yaw_err) < math.radians(5.0):
-                self.get_logger().warn(
+                self.get_logger().warning(
                     f'  ✅ Yaw aligned: err={math.degrees(yaw_err):+.1f}°')
                 break
 
@@ -1883,15 +1883,15 @@ class VisionPickPlace(Node):
                 rclpy.spin_once(self, timeout_sec=0.1)
 
         if cube_ox is None or cube_oy is None:
-            self.get_logger().warn('Camera guided approach: no cube position available')
+            self.get_logger().warning('Camera guided approach: no cube position available')
             return False
 
         # Hold the last known position for fallback during brief TF gaps
         last_good_cube = (cube_ox, cube_oy, time.monotonic())
 
         # ── Phase A + B: yaw-align + forward approach (GT TF servo) ──────────
-        self.get_logger().warn('═══════ VISUAL SERVOING: align + approach ═══════')
-        self.get_logger().warn(
+        self.get_logger().warning('═══════ VISUAL SERVOING: align + approach ═══════')
+        self.get_logger().warning(
             f'  initial cube odom=({cube_ox:.3f},{cube_oy:.3f})  '
             f'robot odom=({self._odom_x:.3f},{self._odom_y:.3f})  '
             f'yaw={math.degrees(self._odom_yaw):.0f}°  '
@@ -1919,7 +1919,7 @@ class VisionPickPlace(Node):
                 # the last known GT TF position instead.
                 age = time.monotonic() - last_good_cube[2]
                 if age > 5.0:
-                    self.get_logger().warn(
+                    self.get_logger().warning(
                         f'Camera guided: GT TF lost for '
                         f'{age:.1f}s, stopping servo')
                     break
@@ -1950,7 +1950,7 @@ class VisionPickPlace(Node):
 
             # Termination: within 8 mm in distance AND 2° in heading.
             if abs(dist_err) < 0.008 and abs(yaw_err) < math.radians(2.0):
-                self.get_logger().warn(
+                self.get_logger().warning(
                     f'  ✅ visual servo converged: '
                     f'dist_err={dist_err*1000:+.0f}mm '
                     f'yaw_err={math.degrees(yaw_err):+.1f}°')
@@ -1979,7 +1979,7 @@ class VisionPickPlace(Node):
         # tightens heading to ≤1.5 ° before the arm descends.  Any residual
         # error from the servo (e.g. convergence hysteresis at 2 °) is
         # corrected here so the gripper drops straight onto the cube.
-        self.get_logger().warn('═══════ PRECISION YAW ALIGNMENT ═══════')
+        self.get_logger().warning('═══════ PRECISION YAW ALIGNMENT ═══════')
         t_yaw = time.monotonic()
         while time.monotonic() - t_yaw < 6.0:
             rclpy.spin_once(self, timeout_sec=0.02)
@@ -1998,7 +1998,7 @@ class VisionPickPlace(Node):
             yaw_err = self._normalize_angle(target_yaw - self._odom_yaw)
                 
             if abs(yaw_err) < math.radians(1.5):
-                self.get_logger().warn(
+                self.get_logger().warning(
                     f'  ✅ precision yaw aligned: err={math.degrees(yaw_err):+.1f}°')
                 break
             twist = Twist()
@@ -2038,18 +2038,18 @@ class VisionPickPlace(Node):
                     except Exception:
                         pass
             if cube_world_x is None:
-                self.get_logger().warn('test_block TF and _object_pose_map unavailable; skipping final X centering')
+                self.get_logger().warning('test_block TF and _object_pose_map unavailable; skipping final X centering')
 
         if cube_world_x is not None and cube_world_y is not None:
-            self.get_logger().warn('═══════ FINAL X CENTERING (test_block TF) ═══════')
-            self.get_logger().warn(
+            self.get_logger().warning('═══════ FINAL X CENTERING (test_block TF) ═══════')
+            self.get_logger().warning(
                 f'  cube_world=({cube_world_x:.4f},{cube_world_y:.4f})  '
                 f'robot odom=({self._odom_x:.4f},{self._odom_y:.4f})')
 
             # Re-derive finger reach from current arm configuration so the
             # controller targets the actual gripper, not a stale FK value.
             actual_finger_base, actual_finger_lat, finger_src = self._get_finger_center_x()
-            self.get_logger().warn(
+            self.get_logger().warning(
                 f'  Phase D finger_center=({actual_finger_base:.5f}, {actual_finger_lat:.5f}) m '
                 f'(source={finger_src})')
 
@@ -2085,7 +2085,7 @@ class VisionPickPlace(Node):
             finger_world_y = self._odom_y + actual_finger_base * math.sin(self._odom_yaw)
             final_err = math.hypot(
                 finger_world_x - cube_world_x, finger_world_y - cube_world_y)
-            self.get_logger().warn(
+            self.get_logger().warning(
                 f'  final finger_world=({finger_world_x:.4f},{finger_world_y:.4f}) '
                 f'cube=({cube_world_x:.4f},{cube_world_y:.4f}) '
                 f'misalignment={final_err*1000:.1f}mm')
@@ -2098,7 +2098,7 @@ class VisionPickPlace(Node):
         # This phase iteratively: (1) measures the lateral offset, (2) rotates
         # the robot to face the cube, and (3) re-approaches forward — repeating
         # until the lateral offset is within the 3 mm tolerance.
-        self.get_logger().warn('═══════ PHASE E: LATERAL CENTERING ═══════')
+        self.get_logger().warning('═══════ PHASE E: LATERAL CENTERING ═══════')
         for _lat_iter in range(5):
             # Refresh cube position from GT TF
             cw_x, cw_y = None, None
@@ -2121,12 +2121,12 @@ class VisionPickPlace(Node):
             lateral = -dx_lat * math.sin(self._odom_yaw) + dy_lat * math.cos(self._odom_yaw)
             forward_err = dx_lat * math.cos(self._odom_yaw) + dy_lat * math.sin(self._odom_yaw)
 
-            self.get_logger().warn(
+            self.get_logger().warning(
                 f'  [lat] iter={_lat_iter}  lateral={lateral*1000:+.1f}mm  '
                 f'forward_err={forward_err*1000:+.1f}mm')
 
             if abs(lateral) < 0.003 and abs(forward_err) < 0.005:
-                self.get_logger().warn('  ✅ lateral centering converged')
+                self.get_logger().warning('  ✅ lateral centering converged')
                 break
 
             # If lateral offset is significant, rotate toward the cube then
@@ -2192,13 +2192,13 @@ class VisionPickPlace(Node):
             fdy = fcw_y - ffw_y
             lat_final = -fdx * math.sin(self._odom_yaw) + fdy * math.cos(self._odom_yaw)
             fwd_final = fdx * math.cos(self._odom_yaw) + fdy * math.sin(self._odom_yaw)
-            self.get_logger().warn(
+            self.get_logger().warning(
                 f'  [lat] FINAL: lateral={lat_final*1000:+.1f}mm  '
                 f'forward={fwd_final*1000:+.1f}mm')
         except Exception:
             pass
 
-        self.get_logger().warn('═══════ VISUAL SERVOING COMPLETE ═══════')
+        self.get_logger().warning('═══════ VISUAL SERVOING COMPLETE ═══════')
         return True
 
     def _correct_robot_x_during_pick(self, obj_world_x, max_correction=0.25):
@@ -2218,10 +2218,10 @@ class VisionPickPlace(Node):
             joints = REACH_DOWN
             finger_center_base = self._gripper_center_x_at_joints(joints) - FK_SETTLE_COMPENSATION
             finger_center_lat = 0.0
-            self.get_logger().warn(
+            self.get_logger().warning(
                 f'  _correct_robot_x: TF unavailable, using FK finger={finger_center_base:.4f}m')
         else:
-            self.get_logger().warn(
+            self.get_logger().warning(
                 f'  _correct_robot_x: TF finger=({finger_center_base:.4f}, {finger_center_lat:.4f})m')
 
         # Recover cube y from test_block TF (most reliable)
@@ -2261,7 +2261,7 @@ class VisionPickPlace(Node):
             forward = dx * math.cos(self._odom_yaw) + dy * math.sin(self._odom_yaw)
             err = forward - finger_center_base
             if time.monotonic() - last_log > 0.3:
-                self.get_logger().warn(
+                self.get_logger().warning(
                     f'  _correct_robot_x: forward={forward*1000:.1f}mm  '
                     f'target={finger_center_base*1000:.1f}mm  err={err*1000:.1f}mm')
                 last_log = time.monotonic()
@@ -2369,7 +2369,7 @@ class VisionPickPlace(Node):
             if abs(yaw_err) > 0.8 and motion < 0.005:  # Not moving, large error
                 stuck_counter += 1
                 if stuck_counter > 50:  # ~1 second of no progress
-                    self.get_logger().warn(
+                    self.get_logger().warning(
                         f'{log_prefix}: STUCK rotating at yaw_err={math.degrees(yaw_err):.0f}°, '
                         f'exiting (progress={motion:.4f}m)')
                     break
@@ -2521,11 +2521,11 @@ class VisionPickPlace(Node):
         Returns True if condition met (ready to pick), False if timeout.
         """
         if not CV_AVAILABLE or self._bridge is None:
-            self.get_logger().warn('  Camera alignment skipped: cv_bridge unavailable')
+            self.get_logger().warning('  Camera alignment skipped: cv_bridge unavailable')
             return False
 
-        self.get_logger().warn('  Starting ROS1-style camera alignment...')
-        self.get_logger().warn('  Target: abs(pixel_x - 320) < 10 AND pixel_y > 440')
+        self.get_logger().warning('  Starting ROS1-style camera alignment...')
+        self.get_logger().warning('  Target: abs(pixel_x - 320) < 10 AND pixel_y > 440')
 
         t0 = time.monotonic()
         last_log = t0
@@ -2549,7 +2549,7 @@ class VisionPickPlace(Node):
 
                 if len(large) == 0:
                     if time.monotonic() - last_log > 1.5:
-                        self.get_logger().warn('  No blue cube in view - searching...')
+                        self.get_logger().warning('  No blue cube in view - searching...')
                         last_log = time.monotonic()
                     self._publish_cmd_vel(Twist())
                     consecutive_good = 0
@@ -2572,7 +2572,7 @@ class VisionPickPlace(Node):
 
                 if time.monotonic() - last_log > 0.5:
                     cube_area = w * h
-                    self.get_logger().warn(
+                    self.get_logger().warning(
                         f'  Camera: cube_pixel=({cube_cx},{cube_cy})  '
                         f'cx_err={cx_err}  cy={cy_err}  area={cube_area}px')
 
@@ -2580,7 +2580,7 @@ class VisionPickPlace(Node):
                 if abs(cx_err) < 10 and cube_cy > 440:
                     consecutive_good += 1
                     if consecutive_good >= 3:
-                        self.get_logger().warn(
+                        self.get_logger().warning(
                             f'  ✅ ROS1 PICK CONDITION MET: cx_err={cx_err} (<10), cy={cube_cy} (>440)')
                         self._publish_cmd_vel(Twist())
                         return True
@@ -2612,11 +2612,11 @@ class VisionPickPlace(Node):
 
             except Exception as e:
                 if time.monotonic() - last_log > 1.0:
-                    self.get_logger().warn(f'  Camera alignment error: {e}')
+                    self.get_logger().warning(f'  Camera alignment error: {e}')
                     last_log = time.monotonic()
                 self._publish_cmd_vel(Twist())
 
-        self.get_logger().warn(f'  ⚠️ Camera alignment timeout after {timeout}s')
+        self.get_logger().warning(f'  ⚠️ Camera alignment timeout after {timeout}s')
         self._publish_cmd_vel(Twist())
         return False
 

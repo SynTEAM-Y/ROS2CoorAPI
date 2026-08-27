@@ -46,7 +46,7 @@ class TestObjectSpawner(Node):
         P = self.get_parameter('P').value
         Y = self.get_parameter('Y').value
 
-        self.get_logger().warn(
+        self.get_logger().warning(
             f'=== SPAWN PARAMS: name={name}, x={x}, y={y}, z={z} ===')
 
         self.get_logger().info(

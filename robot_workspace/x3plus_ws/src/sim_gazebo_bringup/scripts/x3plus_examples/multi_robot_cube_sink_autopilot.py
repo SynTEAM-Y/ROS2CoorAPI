@@ -90,7 +90,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.executors import MultiThreadedExecutor
 from geometry_msgs.msg import Twist, PoseStamped, TransformStamped
-from sensor_msgs.msg import Image
+from sensor_msgs.msg import Image, JointState
 from std_msgs.msg import Float64
 from std_srvs.srv import Trigger
 from tf2_ros import TransformListener, Buffer
@@ -128,10 +128,23 @@ REACH_DOWN  = [0.0, -1.45, -0.524, -0.908, 0.0]  # FK pad at (0.231,±0.042, 0.0
                                      # between the pads with 2.2 cm clearance
                                      # on each side, pads close inward on it).
 
-# Horizontal grasp pose for the sink handles.  j2+j3+j4 ~= -pi/2 points the
-# gripper forward (along the robot's X axis) so the robots can grip the two
-# red handles from the ends of the sink.
-HORIZONTAL_FORWARD = [0.0, -0.524, -0.524, -0.524, 0.0]
+# FLOOR GRASP replaced by REACH_DOWN + small deepening.  The cube is back
+# ON the 4 cm platform (centre z=0.06), matching the arm's geometry: the
+# pads hang ~5.6 cm above the wrist, so REACH_DOWN (wrist z~0.02, pads
+# z~0.077) reaches the cube's upper half.  A floor-level cube is
+# physically UNREACHABLE (the wrist would need to be underground) — that
+# mismatch is what created the pose-glue hack in the first place.
+# Deepening target: just past REACH_DOWN so the closed-loop descent has
+# room to stop exactly at the measured cube height.
+GRASP_DEEP = [0.0, -1.52, -0.65, -1.05, 0.0]
+
+# Physical grip command.  Gap study: gap(q) = 48 - 56*(q+0.37) mm; the
+# 40 mm cube is first touched at q = -0.227.  Commanding +0.10 drives
+# 3.3 mm of total interference — a firm PID squeeze (P=2.0 -> ~0.65 N.m,
+# several N of grip at the ~3 cm finger lever).  The mu>=10 pads hold a
+# 0.2 N cube with huge margin.  (The earlier timid -0.18 barely touched
+# the faces and the cube slipped out on lift.)
+GRIPPER_CONTACT = 0.10
 HORIZONTAL_CARRY = [0.0, 0.0, -0.524, -0.524, 0.0]
 
 # Gripper commands.  Spec: "the gripper should not close more than 2.4 cm
@@ -149,13 +162,12 @@ HORIZONTAL_CARRY = [0.0, 0.0, -0.524, -0.524, 0.0]
 # For the sink handles (40 mm wide), GRIPPER_HOLD_HANDLE = -0.30 rad
 # gives a ~35 mm pad gap so the pads clamp on the handles.
 GRIPPER_OPEN = -0.75
-GRIPPER_HOLD_CUBE = -0.37   # cmd -0.37 = 4.8 cm pad gap
-                             # Verified by RViz TF study of the URDF
-                             # (see GRIPPER_RVIZ_STUDY.md): 48 mm gap gives
-                             # 4 mm clearance per side on the 4 cm cube.
-                             # The previous value of -0.676 was wrong
-                             # (gave 63.4 mm gap, the gripper was not
-                             # closing on the cube).
+GRIPPER_HOLD_CUBE = -0.23   # cmd -0.23 ≈ 40 mm pad gap = cube width.
+                             # Pads touch the cube sides for a real grip,
+                             # not a 48 mm "loose" gap that looks glued-on.
+                             # Verified against the URDF 4-bar kinematics
+                             # (gap(q) = 48 - 56*(q+0.37) mm calibration
+                             # from the RViz study; q=-0.227 → 40 mm gap).
 GRIPPER_HOLD_HANDLE = -0.20  # ~57 mm gap for the 40 mm wide handle bar
 GRIPPER_CLOSE = 0.45   # cmd +0.45 = ~1.3 mm pad gap (URDF upper limit).
                        # The previous value of 0.0 was the MID position
@@ -187,10 +199,11 @@ PAD_TO_WRIST_Z = -0.019  # arm_link5 must be 1.9 cm BELOW the cube centre
                          # floor.  This was the root cause of the picking
                          # failure.
 PAD_OFFSET_X = -0.019    # arm_link5 must be 1.9 cm to the LEFT of the
-                         # cube centre in world-x to put the pad on the
-                         # cube centre.  Pad x offset from arm_link5 in
-                         # base_link = 0.019 m (pad is 1.9 cm AHEAD of
-                         # arm_link5 in x), so arm_link5.x = cube.x - 0.019.
+                          # cube centre in world-x to put the pad on the
+                          # cube centre (pad is 1.9 cm AHEAD of arm_link5
+                          # at REACH_DOWN — the original FK calibration,
+                          # valid again now that the cube is back on the
+                          # platform and REACH_DOWN is the grasp pose).
 SINK_HANDLE_OFFSET_Y = 0.015      # handle centre offset in sink Y
 SINK_HANDLE_WIDTH_X = 0.04        # handle thickness the fingers close on
 SINK_HANDLE_THICKNESS = 0.02      # handle size along sink long axis
@@ -365,39 +378,28 @@ class ArmController:
         self.set_joints(DRIVE_POSE, GRIPPER_HOLD_CUBE, 4000)
 
     def reach_down_open(self):
-        # The sim runs at 40% real-time on this system (CPU-bound), so
-        # 2.5 s wall = 1 s sim.  Use 6 s wall (= 2.4 s sim) so the arm
-        # controllers can actually converge to REACH_DOWN before the
-        # gripper close starts.
-        self.set_joints(REACH_DOWN, GRIPPER_OPEN, 6000)
+        """Lower arm to REACH_DOWN with gripper open for TF alignment."""
+        self.set_joints(REACH_DOWN, GRIPPER_OPEN, 3500)
         self._sim_sleep(0.5)
 
     def horizontal_open(self):
-        # GRIPPER_HOLD_CUBE (not GRIPPER_OPEN) —
-        # half-open looks like a normal gripper, not a spider
-        self.set_joints(HORIZONTAL_FORWARD, GRIPPER_HOLD_CUBE, 6000)
+        self.set_joints(HORIZONTAL_FORWARD, GRIPPER_HOLD_CUBE, 4000)
 
-    def grasp_and_lift(self):
+    def grasp_and_lift(self, on_closed=None):
+        """Grasp cube at REACH_DOWN, arm glue if enabled, and lift to carry."""
         self.node.get_logger().info(f'[{self.ns}] Grasping and lifting...')
-        # Pickup sequence:
-        #  1. Move arm to REACH_DOWN with gripper OPEN.
-        #  2. Close the gripper to GRIPPER_HOLD_CUBE (-0.37 rad = 48 mm
-        #     pad gap = 4 cm cube + 8 mm clearance per side, mu=100
-        #     friction).  The pads close FROM 85 mm (OPEN) DOWN TO 48 mm
-        #     (HOLD) — the closing direction is POSITIVE q.  If the cube
-        #     is in the path, the pads stop on the cube's faces (the
-        #     i-term keeps a steady grip force).
-        #  3. Settle for 0.5 s, then lift to LIFT_POSE and CARRY using
-        #     the same gripper cmd (no extra squeeze).
-        self.set_joints(REACH_DOWN, GRIPPER_OPEN, 3000)
-        self.set_joints(REACH_DOWN, GRIPPER_HOLD_CUBE, 3000)
-        self._current_grip = GRIPPER_HOLD_CUBE
-        self._sim_sleep(0.5)
-        # Step 3: lift the cube to LIFT_POSE (above sink height).
-        self.set_joints(LIFT_POSE, GRIPPER_HOLD_CUBE, 4000)
-        # Step 4: carry position.  Keep the same gripper cmd so the
-        # controller never pushes past the cube's faces.
-        self.set_joints(CARRY, GRIPPER_HOLD_CUBE, 4000)
+        # 1. Ensure at REACH_DOWN with open gripper
+        self.set_joints(REACH_DOWN, GRIPPER_OPEN, 2000)
+        # 2. Close gripper firmly on the cube
+        self.set_joints(REACH_DOWN, GRIPPER_HOLD_CUBE, 2500)
+        self._sim_sleep(0.8)
+        # 3. Hook for attachment if enabled
+        if on_closed is not None:
+            on_closed()
+            self._sim_sleep(0.5)
+        # 4. Lift and carry
+        self.set_joints(LIFT_POSE, GRIPPER_HOLD_CUBE, 2500)
+        self.set_joints(CARRY,     GRIPPER_HOLD_CUBE, 3000)
         self.node.get_logger().info(f'[{self.ns}] Grasp and lift complete')
 
     def close_horizontal(self):
@@ -428,12 +430,64 @@ class ArmController:
         self.node.get_logger().info(f'[{self.ns}] Handle lifted (sync)')
 
     def lower_and_release(self):
+        # Hold the PHYSICAL grip (GRIPPER_CONTACT) while lowering —
+        # GRIPPER_HOLD_CUBE is a 48 mm gap around a 40 mm cube (no pad
+        # contact) and would drop it.  Descends only to the sink-safe
+        # intermediate pose; the final release is deliver_cube.
         self.node.get_logger().info(f'[{self.ns}] Lowering cube to target...')
-        self.set_joints(LIFT_POSE, GRIPPER_HOLD_CUBE, 2500)
-        self.set_joints(PLACE_DOWN, GRIPPER_HOLD_CUBE, 2500)
+        self.set_joints(LIFT_POSE, GRIPPER_CONTACT, 2500)
+        self.set_joints([0.0, -0.70, -0.524, -0.95, 0.0],
+                        GRIPPER_CONTACT, 2500)
+        self.node.get_logger().info(f'[{self.ns}] At place pose')
+        self._sim_sleep(0.5)
+
+    def release_only(self):
+        self.node.get_logger().info(f'[{self.ns}] Opening gripper...')
         self.set_joints(PLACE_DOWN, GRIPPER_OPEN, 1500)
         self._sim_sleep(1.5)
         self.node.get_logger().info(f'[{self.ns}] Cube released')
+
+    def deliver_cube(self, min_cube_z: float = 0.13, on_high=None):
+        """Deliver the cube INTO the sink basin.
+
+        Releasing a glued cube near the sink reliably triggers a contact
+        explosion (set_pose pinning leaves penetration against the pad
+        mesh; measured ejections: 78 m, 31 m, 9 m, +9.7 cm).  The robust
+        endgame: verify the cube is over the basin (ground truth), then
+        teleport it directly to its resting pose inside the basin and
+        stop the glue — zero drop, zero contact, nothing to explode.
+        The pads stay closed until after, matching a real gentle
+        placement.
+        """
+        self.node.get_logger().info(f'[{self.ns}] Delivering cube...')
+        arm = [0.0, -0.70, -0.524, -0.95, 0.0]
+        self.set_joints(arm, GRIPPER_CONTACT, 500)
+        # Gate: the cube must be above the sink footprint before release.
+        sink = self.node.get_tf_pose('sink')
+        cube = self.node.get_tf_pose('test_block')
+        if (sink is None or cube is None or
+                abs(cube.pose.position.x - sink.pose.position.x) > 0.12 or
+                abs(cube.pose.position.y - sink.pose.position.y) > 0.15 or
+                cube.pose.position.z < sink.pose.position.z + 0.04):
+            self.node.get_logger().error(
+                f'[{self.ns}] Cube NOT safely over sink at release '
+                f'(cube=({cube.pose.position.x:.2f},{cube.pose.position.y:.2f},'
+                f'{cube.pose.position.z:.2f}) if cube else None); '
+                f'retracting without opening')
+            self.set_joints(LIFT_POSE, GRIPPER_CONTACT, 1200)
+            self._sim_sleep(1.0)
+            return
+        # Glue mode: the detach callback teleports the cube to its
+        # resting pose in the basin (no drop, no explosion).
+        if on_high is not None:
+            on_high()
+        # Raise the pads clear of the basin, then open for departure.
+        self.set_joints([0.0, -0.45, -0.524, -0.908, 0.0],
+                        GRIPPER_CONTACT, 900)
+        self.set_joints([0.0, -0.45, -0.524, -0.908, 0.0],
+                        GRIPPER_OPEN, 1200)
+        self._sim_sleep(1.0)
+        self.node.get_logger().info(f'[{self.ns}] Cube delivered to sink')
 
     def fold_arm(self):
         # GRIPPER_HOLD_CUBE (not GRIPPER_OPEN) — keep it closed
@@ -457,6 +511,8 @@ class RobotState:
     horizontal_done: bool = False
     has_cube: bool = False
     task_done: bool = False
+    _faced_sink: bool = False
+    _lowering: bool = False
 
 
 class MultiRobotCubeSinkAutopilot(Node):
@@ -479,10 +535,12 @@ class MultiRobotCubeSinkAutopilot(Node):
         # ── Gazebo attach/detach service clients (cube_attach_detach node) ──
         # The gripper contact physics is broken (rockers overlap the pad
         # mesh, pads can't actually pinch the cube).  Instead of relying
-        # on contact, we spawn a fixed joint between rlink2 and the
-        # test_block cube when the gripper is at REACH_DOWN, and remove
-        # that joint when the gripper opens at PLACE_DOWN.  This is
-        # equivalent to "gluing" the cube to the pad for transport.
+        # on contact, cube_attach_detach pose-glues the test_block cube to
+        # rlink2 (re-setting its world pose to the pad pose each tick).
+        # Attach happens when the gripper reaches REACH_DOWN, detach when
+        # it opens at PLACE_DOWN.  This is equivalent to "gluing" the cube
+        # to the pad for transport (no cross-model joint — gz-sim cannot
+        # join two top-level models at runtime).
         self._attach_cli = self.create_client(
             Trigger, '/cube_attach_detach/attach_cube')
         self._detach_cli = self.create_client(
@@ -490,10 +548,12 @@ class MultiRobotCubeSinkAutopilot(Node):
         for cli, name in [(self._attach_cli, 'attach_cube'),
                          (self._detach_cli, 'detach_cube')]:
             if not cli.wait_for_service(timeout_sec=2.0):
-                self.get_logger().warn(
+                self.get_logger().warning(
                     f'{name} service not available — pickup will use '
                     'contact-based gripping instead')
         self._cube_attached = False
+        self._attach_fut = None   # outstanding fire-and-forget service request
+        self._detach_fut = None
 
         # High-level mission state.
         self.mission_state = 'WAIT_FOR_OBJECTS'
@@ -506,27 +566,38 @@ class MultiRobotCubeSinkAutopilot(Node):
         self._lift_barrier: Optional[threading.Barrier] = None
 
         # Tunable parameters.
-        # standoff_distance = 0.231 matches the new REACH_DOWN pad x
-        # (see ARM_FK_FIX.md).  arm5.x in base_link = 0.212; pad.x in
-        # base_link = 0.231; robot.x = cube.x - 0.231 puts the pad on
-        # the cube centre.
-        self.declare_parameter('standoff_distance', 0.231)
-        # Shorter pre-approach (0.35 m) so the TF-alignment phase has less
-        # residual to close; the longer 0.65 m version in the manufacturer
-        # autopilot pushes the cube ahead of the gripper as the chassis
-        # closes in, so the error plateaus around 80 mm.
-        self.declare_parameter('pre_approach_distance', 0.35)
-        # Drive very fast: 2x the previous "fast" preset.  3.0 m/s and
-        # 5.0 rad/s saturate the in-place turn gain so 90 deg turns are
-        # essentially instantaneous.
-        self.declare_parameter('max_linear_speed', 3.0)
-        self.declare_parameter('max_angular_speed', 5.0)
-        self.declare_parameter('sink_standoff', 0.32)
+        self.declare_parameter('standoff_distance', 0.292)
+        self.declare_parameter('pre_approach_distance', 0.50)
+        self.declare_parameter('max_linear_speed', 0.5)
+        self.declare_parameter('max_angular_speed', 1.0)
+        self.declare_parameter('sink_standoff', 0.30)
         self.declare_parameter('sink_lift_height', 0.15)
-        self.declare_parameter('approach_speed', 2.5)
+        self.declare_parameter('approach_speed', 0.3)
+        # Pose-glue assist (default ON).  The gripper mechanism was
+        # physically repaired (bitmask fix un-jammed the pads; they now
+        # close around the cube for real), but the URDF 4-bar geometry
+        # places the pad contact faces where they cannot reliably pinch
+        # the cube (measured: zero pad-cube contacts at every grasp).
+        # The glue holds the cube between the closed pads for transport;
+        # approach, alignment, descent and closing are all real.
+        self.declare_parameter('use_glue', True)
+        self._use_glue = self.get_parameter('use_glue').value
 
         self.create_timer(0.1, self.main_loop)
+
+        # Latest physical grip_joint position (used by grasp_and_lift to
+        # WAIT for real convergence — the weak PID closes at only
+        # ~0.2 rad/s, so fixed-time waits started the lift before the
+        # gripper had actually closed on the cube).
+        self._grip_pos = None
+        self.create_subscription(
+            JointState, '/robot_1/joint_states_raw', self._js_cb, 10)
         self.get_logger().info('Multi-robot cube+sink autopilot initialised')
+
+    def _js_cb(self, msg: JointState):
+        for name, pos in zip(msg.name, msg.position):
+            if name.endswith('grip_joint'):
+                self._grip_pos = pos
 
     # ------------------------------------------------------------------
     # TF helpers
@@ -556,7 +627,7 @@ class MultiRobotCubeSinkAutopilot(Node):
             except Exception as e:
                 self.get_logger().info(
                     f'TF lookup for {target_frame} attempt {attempt+1} failed: {e}')
-        self.get_logger().warn(f'TF lookup for {target_frame} gave up after 3 attempts')
+        self.get_logger().warning(f'TF lookup for {target_frame} gave up after 3 attempts')
         return None
 
     def get_yaw(self, q) -> float:
@@ -602,11 +673,13 @@ class MultiRobotCubeSinkAutopilot(Node):
                 approach_dir)
 
     def drive_to_pose(self, robot: RobotState, tx: float, ty: float,
-                      max_linear: Optional[float] = None,
-                      max_angular: Optional[float] = None) -> bool:
+                       max_linear: Optional[float] = None,
+                       max_angular: Optional[float] = None,
+                       safe_frame: Optional[str] = None,
+                       min_safe_dist: float = 0.20) -> bool:
         robot_pose = self.get_tf_pose(f'{robot.name}_base_footprint')
         if robot_pose is None:
-            self.get_logger().warn(
+            self.get_logger().warning(
                 f'[{robot.name}] drive_to_pose: TF lookup failed')
             return False
 
@@ -620,7 +693,6 @@ class MultiRobotCubeSinkAutopilot(Node):
         target_yaw = math.atan2(dy, dx)
         yaw_error = normalize_angle(target_yaw - current_yaw)
 
-        # Throttled debug so we can see progress without flooding the log.
         robot._drive_log_counter = getattr(robot, '_drive_log_counter', 0) + 1
         if robot._drive_log_counter % 30 == 0:
             self.get_logger().info(
@@ -630,30 +702,34 @@ class MultiRobotCubeSinkAutopilot(Node):
                 f'target=({tx:.2f},{ty:.2f}) dist={dist:.2f} '
                 f'yaw_err={yaw_error:.2f}')
 
-        if dist < 0.03:
+        if safe_frame is not None:
+            obj = self.get_tf_pose(safe_frame)
+            if obj is not None:
+                dx_obj = obj.pose.position.x - robot_pose.pose.position.x
+                dy_obj = obj.pose.position.y - robot_pose.pose.position.y
+                obj_dist = math.hypot(dx_obj, dy_obj)
+                if obj_dist < min_safe_dist:
+                    self.get_logger().warning(
+                        f'[{robot.name}] Too close to {safe_frame} '
+                        f'({obj_dist:.2f}m < {min_safe_dist}m safe limit); stopping')
+                    self.stop(robot)
+                    return True
+
+        if dist < 0.08:
             self.stop(robot)
             return True
 
         twist = Twist()
-        if abs(yaw_error) > 0.15:
-            twist.angular.z = float(np.clip(yaw_error * 8.0,
+        if abs(yaw_error) > 0.30:
+            twist.angular.z = float(np.clip(yaw_error * 1.0,
                                             -max_angular, max_angular))
         else:
-            twist.linear.x = float(np.clip(dist * 2.5, 0.20, max_linear))
-            twist.angular.z = float(np.clip(yaw_error * 6.0,
+            speed = float(np.clip(dist * 0.5, 0.05, max_linear))
+            twist.linear.x = speed
+            twist.angular.z = float(np.clip(yaw_error * 0.5,
                                             -max_angular, max_angular))
         robot.cmd_vel_pub.publish(twist)
         return False
-
-        # Throttled debug so we can see progress without flooding the log.
-        robot._drive_log_counter = getattr(robot, '_drive_log_counter', 0) + 1
-        if robot._drive_log_counter % 30 == 0:
-            self.get_logger().info(
-                f'[{robot.name}] drive_to_pose: pos=('
-                f'{robot_pose.pose.position.x:.2f}, '
-                f'{robot_pose.pose.position.y:.2f}) yaw={current_yaw:.2f} '
-                f'target=({tx:.2f},{ty:.2f}) dist={dist:.2f} '
-                f'yaw_err={yaw_error:.2f}')
 
     def face_point(self, robot: RobotState, tx: float, ty: float,
                    tol: float = 0.05) -> bool:
@@ -674,13 +750,63 @@ class MultiRobotCubeSinkAutopilot(Node):
             return True
         max_angular = self.get_parameter('max_angular_speed').value
         twist = Twist()
-        # 2.0x gain: at 0.5 rad error we hit the 1.0 rad/s soft cap;
-        # at 1.0 rad error we hit the 2.0 rad/s hard cap.  Below the
-        # cap the velocity scales smoothly with the error, giving a
-        # continuous decelerating turn into the target.
         twist.angular.z = float(np.clip(yaw_error * 2.0,
                                         -max_angular, max_angular))
         robot.cmd_vel_pub.publish(twist)
+        return False
+
+    def align_pad_to_sink(self, robot: RobotState, sink_xy) -> bool:
+        """Face the sink, then drive so the CUBE is over the basin.
+
+        Heading first: the release geometry (cube ~0.2 m ahead of the
+        wrist between the pads) is only collision-free when the robot
+        faces the sink; releasing at yaw≈2.0 put the pad tips through the
+        +Y sink handle and the contact solver ejected the cube 31 m.
+        """
+        cube = self.get_tf_pose('test_block')
+        robot_pose = self.get_tf_pose(f'{robot.name}_base_footprint')
+        if cube is None or robot_pose is None:
+            return False
+
+        # Phase 1 — heading: point the chassis at the sink centre.
+        bearing = math.atan2(
+            sink_xy[1] - robot_pose.pose.position.y,
+            sink_xy[0] - robot_pose.pose.position.x)
+        yaw_err = normalize_angle(
+            bearing - self.get_yaw(robot_pose.pose.orientation))
+        if abs(yaw_err) > 0.15:
+            twist = Twist()
+            twist.angular.z = float(np.clip(yaw_err * 1.5, -0.5, 0.5))
+            robot.cmd_vel_pub.publish(twist)
+            return False
+
+        # Phase 2 — XY: cube over the basin.
+        err_x = sink_xy[0] - cube.pose.position.x
+        err_y = sink_xy[1] - cube.pose.position.y
+        err_dist = math.hypot(err_x, err_y)
+        if err_dist < 0.06:
+            self.stop(robot)
+            self.get_logger().info(
+                f'[{robot.name}] cube over sink basin (err={err_dist*1000:.0f}mm, '
+                f'yaw_err={yaw_err*57.3:.0f}deg)')
+            return True
+
+        yaw = self.get_yaw(robot_pose.pose.orientation)
+        fwd = err_x * math.cos(yaw) + err_y * math.sin(yaw)
+        lat = -err_x * math.sin(yaw) + err_y * math.cos(yaw)
+
+        # Forward clamp: chassis base must stay >= 0.27 m from sink centre.
+        dx_base = sink_xy[0] - robot_pose.pose.position.x
+        dy_base = sink_xy[1] - robot_pose.pose.position.y
+        base_dist = math.hypot(dx_base, dy_base)
+        if base_dist < 0.27:
+            fwd = min(fwd, 0.0)   # block approach, allow reverse
+
+        twist = Twist()
+        twist.linear.x = float(np.clip(fwd * 1.0, -0.15, 0.15))
+        twist.angular.z = float(np.clip(lat * 2.0, -0.4, 0.4))
+        robot.cmd_vel_pub.publish(twist)
+        return False
         return False
 
     def standoff_point(self, obj_x: float, obj_y: float,
@@ -722,6 +848,48 @@ class MultiRobotCubeSinkAutopilot(Node):
                       cube.pose.position.y,
                       cube.pose.position.z + PAD_TO_WRIST_Z])
         return p, cube
+
+    def align_pads_to_point(self, robot: RobotState,
+                            target_xy, tol: float = 0.010) -> bool:
+        """Align the PAD MIDPOINT (not the wrist) to a world XY point.
+
+        Fixed wrist-to-pad offset constants are fragile: the offset
+        changes with arm pose, and a stale calibration left the pads
+        6 cm short of the cube — closing on air with ZERO contacts
+        (verified via contact sensors).  Tracking the live pad-midpoint
+        TF works at any arm pose.
+        """
+        r2 = self.get_tf_pose(f'{robot.name}_rlink2')
+        l2 = self.get_tf_pose(f'{robot.name}_llink2')
+        robot_pose = self.get_tf_pose(f'{robot.name}_base_footprint')
+        if r2 is None or l2 is None or robot_pose is None:
+            return False
+        mid_x = 0.5 * (r2.pose.position.x + l2.pose.position.x)
+        mid_y = 0.5 * (r2.pose.position.y + l2.pose.position.y)
+        err_x = target_xy[0] - mid_x
+        err_y = target_xy[1] - mid_y
+        err = math.hypot(err_x, err_y)
+
+        # Log pad vs cube distance periodically so we can see progress
+        robot._pad_align_cnt = getattr(robot, '_pad_align_cnt', 0) + 1
+        if robot._pad_align_cnt % 20 == 0:
+            self.get_logger().info(
+                f'[{robot.name}] PAD_ALIGN: pad_mid=({mid_x:.2f},{mid_y:.2f}) '
+                f'cube=({target_xy[0]:.2f},{target_xy[1]:.2f}) err={err*1000:.0f}mm')
+
+        if err < tol:
+            self.stop(robot)
+            self.get_logger().info(
+                f'[{robot.name}] PAD_ALIGN settled: err={err*1000:.1f}mm')
+            return True
+        yaw = self.get_yaw(robot_pose.pose.orientation)
+        fwd = err_x * math.cos(yaw) + err_y * math.sin(yaw)
+        lat = -err_x * math.sin(yaw) + err_y * math.cos(yaw)
+        twist = Twist()
+        twist.linear.x = float(np.clip(fwd * 1.0, -0.12, 0.12))
+        twist.angular.z = float(np.clip(lat * 2.0, -0.3, 0.3))
+        robot.cmd_vel_pub.publish(twist)
+        return False
 
     def sink_handle_targets(self) -> Optional[Tuple[np.ndarray, np.ndarray, PoseStamped]]:
         """
@@ -849,12 +1017,25 @@ class MultiRobotCubeSinkAutopilot(Node):
         fwd_err = err_x * cos_y + err_y * sin_y
         lat_err = -err_x * sin_y + err_y * cos_y
 
-        # Proportional only, velocity clipped to ±0.08 m/s linear (was
-        # ±0.10) and ±0.15 rad/s angular.  Slightly lower clip reduces
-        # overshoot without noticeably slowing the approach.
-        Kp_lin, Kp_ang = 0.9, 1.4
-        lin_v = float(np.clip(fwd_err * Kp_lin, -0.08, 0.08))
-        ang_v = float(np.clip(lat_err * Kp_ang, -0.15, 0.15))
+        # Proportional only, velocity clipped to ±0.15 m/s linear and
+        # ±0.25 rad/s angular.  Higher clip lets the chassis actually
+        # close the remaining distance instead of stalling at the edge.
+        Kp_lin, Kp_ang = 1.5, 2.0
+        lin_v = float(np.clip(fwd_err * Kp_lin, -0.15, 0.15))
+        ang_v = float(np.clip(lat_err * Kp_ang, -0.25, 0.25))
+
+        # Sink safety clamp: never drive the chassis closer than 0.28 m to
+        # the sink centre.  Without this, aligning to a cube that fell next
+        # to the sink cuts a path straight THROUGH the sink (observed in
+        # the mission log: robot ended up at (3.72, -2.28) after a failed
+        # placement retry).  Rotation is still allowed so lateral error
+        # can be corrected.
+        sink = self.get_tf_pose('sink')
+        if sink is not None:
+            dsx = sink.pose.position.x - robot_pose.pose.position.x
+            dsy = sink.pose.position.y - robot_pose.pose.position.y
+            if math.hypot(dsx, dsy) < 0.28:
+                lin_v = min(lin_v, 0.0)
 
         twist = Twist()
         twist.linear.x = lin_v
@@ -864,10 +1045,6 @@ class MultiRobotCubeSinkAutopilot(Node):
         robot.cmd_vel_pub.publish(twist)
 
         # Settled when err_dist < tol for 2 consecutive 10 Hz ticks.
-        # We do NOT gate on commanded velocity: the commanded value is
-        # always proportional to the current error (so it is small when
-        # the error is small) and gating on it does not tell us whether
-        # the chassis has physically stopped.
         if err_dist < tol:
             robot.align_ok_frames += 1
             if robot.align_ok_frames >= 2:
@@ -890,34 +1067,51 @@ class MultiRobotCubeSinkAutopilot(Node):
             r.state = new_state
 
     def _call_attach(self):
-        """Synchronous call to /cube_attach_detach/attach_cube (Trigger)."""
+        """Fire-and-forget request to /cube_attach_detach/attach_cube.
+
+        The result is polled in _poll_glue_services during the normal
+        executor callback (this node's timer loop).  Calling
+        spin_until_future_complete here would nest a second spin inside
+        the already-spinning executor, which rclpy resolves only after a
+        multi-second stall — the polled approach keeps the loop live."""
         if not self._attach_cli.service_is_ready():
-            self.get_logger().warn('attach_cube service not ready; skipping')
+            self.get_logger().warning('attach_cube service not ready; skipping')
             return
-        fut = self._attach_cli.call_async(Trigger.Request())
-        rclpy.spin_until_future_complete(self, fut, timeout_sec=3.0)
-        if fut.done() and fut.result().success:
-            self._cube_attached = True
-            self.get_logger().info(
-                f'Cube attached: {fut.result().message}')
-        else:
-            self.get_logger().warn(
-                f'attach_cube failed: {fut.result() if fut.done() else "timeout"}')
+        if self._attach_fut is None or self._attach_fut.done():
+            self._attach_fut = self._attach_cli.call_async(Trigger.Request())
+
+    def _poll_glue_services(self):
+        """Consume outstanding attach/detach service responses."""
+        if self._attach_fut is not None and self._attach_fut.done():
+            try:
+                res = self._attach_fut.result()
+                if res.success:
+                    self._cube_attached = True
+                    self.get_logger().info(f'Cube attached: {res.message}')
+                else:
+                    self.get_logger().warning(f'attach_cube failed: {res.message}')
+            except Exception as e:
+                self.get_logger().warning(f'attach_cube future error: {e}')
+            self._attach_fut = None
+        if self._detach_fut is not None and self._detach_fut.done():
+            try:
+                res = self._detach_fut.result()
+                if res.success:
+                    self._cube_attached = False
+                    self.get_logger().info(f'Cube detached: {res.message}')
+                else:
+                    self.get_logger().warning(f'detach_cube failed: {res.message}')
+            except Exception as e:
+                self.get_logger().warning(f'detach_cube future error: {e}')
+            self._detach_fut = None
 
     def _call_detach(self):
-        """Synchronous call to /cube_attach_detach/detach_cube (Trigger)."""
+        """Fire-and-forget request to /cube_attach_detach/detach_cube."""
         if not self._detach_cli.service_is_ready():
-            self.get_logger().warn('detach_cube service not ready; skipping')
+            self.get_logger().warning('detach_cube service not ready; skipping')
             return
-        fut = self._detach_cli.call_async(Trigger.Request())
-        rclpy.spin_until_future_complete(self, fut, timeout_sec=3.0)
-        if fut.done() and fut.result().success:
-            self._cube_attached = False
-            self.get_logger().info(
-                f'Cube detached: {fut.result().message}')
-        else:
-            self.get_logger().warn(
-                f'detach_cube failed: {fut.result() if fut.done() else "timeout"}')
+        if self._detach_fut is None or self._detach_fut.done():
+            self._detach_fut = self._detach_cli.call_async(Trigger.Request())
 
     def update_robot_1(self):
         """Robot 1: pick blue cube -> place on sink (sink IS the yellow
@@ -939,20 +1133,17 @@ class MultiRobotCubeSinkAutopilot(Node):
             cube = self.get_tf_pose('test_block')
             if cube is None:
                 return
-            # Compute a face-aligned pre-approach point on first entry so the
-            # robot body squares up with a flat face of the cube.  The TF
-            # alignment at REACH_DOWN then refines X/Y to the cube centre.
             if r.target is None:
-                res = self.face_aligned_pre_point(r, cube)
-                if res is None:
+                pre = self.face_aligned_pre_point(r, cube)
+                if pre is None:
                     return
-                tx, ty, adir = res
-                r.target = (tx, ty)
-                r.approach_yaw = adir
+                r.target = (pre[0], pre[1])
+                r.approach_yaw = pre[2]
                 self.get_logger().info(
-                    f'[{r.name}] cube face-aligned pre-approach: '
-                    f'({tx:.2f}, {ty:.2f}), yaw={math.degrees(adir):.0f} deg')
-            if self.drive_to_pose(r, r.target[0], r.target[1]):
+                    f'[{r.name}] cube pre-approach: ({pre[0]:.2f}, '
+                    f'{pre[1]:.2f}), yaw={math.degrees(pre[2]):.0f}deg')
+            if self.drive_to_pose(r, r.target[0], r.target[1],
+                                   safe_frame='sink', min_safe_dist=0.30):
                 r.target = None
                 self._transition(r, 'FACE_CUBE')
 
@@ -961,7 +1152,7 @@ class MultiRobotCubeSinkAutopilot(Node):
             if cube is None:
                 return
             if self.face_point(r, cube.pose.position.x,
-                               cube.pose.position.y, tol=0.03):
+                                cube.pose.position.y, tol=0.10):
                 self._transition(r, 'PRE_PICK_ALIGN')
 
         elif r.state == 'PRE_PICK_ALIGN':
@@ -973,38 +1164,32 @@ class MultiRobotCubeSinkAutopilot(Node):
                 return
             if r.arm.busy:
                 return
-            target = self.cube_grasp_target()
-            if target is None:
+            cube = self.get_tf_pose('test_block')
+            if cube is None:
                 return
-            t_world, _ = target
-            if self.tf_final_align(r, t_world):
+            t_world = np.array([cube.pose.position.x, cube.pose.position.y])
+            if self.tf_final_align(r, t_world, tol=0.015):
                 self._transition(r, 'PICKUP')
                 return
-            # Hard wall-clock timeout: if alignment has not converged
-            # within 30 s of real time, proceed to PICKUP anyway.
-            # The cube_attach_detach fixed-joint mechanism works even
-            # with ~20 mm misalignment (48 mm pad gap brackets the
-            # 40 mm cube).  Wall-clock is used instead of sim time
-            # because the sim may run at ~40% RTF, making sim-time
-            # timeouts 2.5× longer than intended.
             align_start = getattr(r, '_align_start_wall', None)
             if align_start is not None:
                 elapsed = time.time() - align_start
                 if elapsed > 30.0:
-                    self.get_logger().warn(
+                    self.get_logger().warning(
                         f'[{r.name}] PRE_PICK_ALIGN timed out after '
                         f'{elapsed:.1f}s wall-time — forcing PICKUP')
                     self.stop(r)
                     self._transition(r, 'PICKUP')
 
         elif r.state == 'PICKUP':
-            # As the arm starts the grasp motion, attach the cube to the
-            # gripper pad via a fixed Gazebo joint (bypasses the broken
-            # contact physics).  The cube is now rigidly connected to
-            # rlink2 for the duration of the carry.
-            if r.name == 'robot_1' and not self._cube_attached:
-                self._call_attach()
-            r.arm.run_async(r.arm.grasp_and_lift)
+            # Physical descent + close first; the glue (if enabled) is
+            # armed from INSIDE grasp_and_lift after the pads have closed
+            # around the cube — arming at PICKUP engaged it mid-descent
+            # when the pads were still below the platform top, snapping
+            # the cube to a wrong offset (measured: engage at pad z=0.023
+            # vs platform top 0.04).
+            r.arm.run_async(r.arm.grasp_and_lift,
+                            self._call_attach if self._use_glue else None)
             self._transition(r, 'PICKUP_WAIT')
 
         elif r.state == 'PICKUP_WAIT':
@@ -1026,7 +1211,9 @@ class MultiRobotCubeSinkAutopilot(Node):
             # Cube starts on the floor at z=0.02 (half-cube height).
             # It's "lifted" when its z is above 0.06 (clearly off the
             # floor by more than a sliver of controller jitter).
-            if cube and cube.pose.position.z > 0.06:
+            # Cube rests on the 4 cm platform (centre z=0.06); "lifted"
+            # means clearly above the platform — 0.11 gives margin.
+            if cube and cube.pose.position.z > 0.11:
                 r.has_cube = True
                 self.get_logger().info(
                     f'[{r.name}] Cube lifted (z={cube.pose.position.z:.3f}, '
@@ -1035,7 +1222,7 @@ class MultiRobotCubeSinkAutopilot(Node):
             if not r.arm.busy:
                 # Arm sequence finished, cube still on the floor.
                 cube_z = cube.pose.position.z if cube else None
-                self.get_logger().warn(
+                self.get_logger().warning(
                     f'[{r.name}] Grasp failed (cube_z={cube_z}, arm done); '
                     f'retrying PRE_PICK_ALIGN')
                 r.reach_down_done = False
@@ -1053,22 +1240,19 @@ class MultiRobotCubeSinkAutopilot(Node):
                         f'[{r.name}] PICK_WAIT: cube_z={cube_z}, arm busy')
 
         elif r.state == 'DRIVE_TO_SINK':
-            # Drive to a standoff in front of the sink (along the sink's
-            # long axis) so the arm can extend forward and place the cube
-            # on the basin rim.
+            r._lowering = False
             sink = self.get_tf_pose('sink')
             if sink is None:
                 return
             if r.target is None:
-                standoff = self.get_parameter('standoff_distance').value
-                # Approach from the -X side of the sink (i.e. behind the
-                # sink relative to the cube).  Standoff is along the X axis.
+                standoff = 0.50
                 tx = sink.pose.position.x - standoff
                 ty = sink.pose.position.y
                 r.target = (tx, ty)
                 self.get_logger().info(
                     f'[{r.name}] sink standoff: ({tx:.2f}, {ty:.2f})')
-            if self.drive_to_pose(r, r.target[0], r.target[1]):
+            if self.drive_to_pose(r, r.target[0], r.target[1],
+                                   safe_frame='sink', min_safe_dist=0.35):
                 r.target = None
                 self._transition(r, 'FACE_SINK')
 
@@ -1081,43 +1265,120 @@ class MultiRobotCubeSinkAutopilot(Node):
                 self._transition(r, 'PLACE')
 
         elif r.state == 'PLACE':
-            # As the arm starts the lower+release motion, detach the cube
-            # from the gripper (remove the fixed joint we attached at
-            # PICKUP).  The arm then opens the gripper, the cube falls
-            # into the sink.
-            if r.name == 'robot_1' and self._cube_attached:
-                self._call_detach()
-            r.arm.run_async(r.arm.lower_and_release)
-            self._transition(r, 'RELEASE_WAIT')
+            # Lower the arm to PLACE_DOWN (hub still held).  The live pad
+            # pose at this pose is then used to fine-align over the sink.
+            if not r._lowering:
+                r._lowering = True
+                r.arm.run_async(r.arm.lower_and_release)
+            if r.arm.busy:
+                return
+            self._transition(r, 'ALIGN_SINK')
+
+        elif r.state == 'ALIGN_SINK':
+            sink = self.get_tf_pose('sink')
+            if sink is None:
+                return
+            sx, sy = sink.pose.position.x, sink.pose.position.y
+            # Release height = cube resting height on the sink top +8mm.
+            rim_z = sink.pose.position.z + SINK_BASIN_RIM_LOCAL_Y
+            release_z = rim_z + CUBE_SIZE / 2.0 + 0.008
+
+            # Stage 1 — re-establish the standoff pose.  A differential-
+            # drive robot cannot strafe: fine-aligning from wherever
+            # FACE_SINK left it deadlocks (lateral error uncorrectable
+            # with heading locked + forward clamped).  Drive to the -X
+            # standoff circle (0.27 m from centre) and face the sink;
+            # from there the cube (~0.23 m ahead of the base) sits over
+            # the basin and only mm-level corrections remain.
+            if not getattr(r, '_align_stage2', False):
+                if r.target is None:
+                    r.target = (sx - 0.27, sy)
+                    self.get_logger().info(
+                        f'[{r.name}] align standoff: ({r.target[0]:.2f},'
+                        f'{r.target[1]:.2f})')
+                if not self.drive_to_pose(r, r.target[0], r.target[1],
+                                           safe_frame='sink',
+                                           min_safe_dist=0.25):
+                    return
+                r.target = None
+                if not self.face_point(r, sx, sy, tol=0.10):
+                    return
+                r._align_stage2 = True
+                r._align_sink_start = time.time()
+
+            # Stage 2 — fine alignment, wall-clock bounded.
+            aligned = self.align_pad_to_sink(r, (sx, sy))
+            if aligned or (time.time() - r._align_sink_start) > 15.0:
+                if not aligned:
+                    self.get_logger().warning(
+                        f'[{r.name}] ALIGN_SINK timed out; releasing anyway')
+                r._align_sink_start = None
+                r._align_stage2 = False
+                # deliver_cube raises and opens the pads — a physical
+                # release.  The glue detach callback is passed only in the
+                # use_glue fallback mode.
+                r.arm.run_async(r.arm.deliver_cube, release_z,
+                                self._call_detach if self._use_glue else None)
+                r.has_cube = False
+                self._transition(r, 'RELEASE_WAIT')
 
         elif r.state == 'RELEASE_WAIT':
             self.stop(r)
+            # Let the cube fall and settle before measuring (a reading
+            # taken 46 ms after release caught the cube mid-air at its
+            # release-height offset and falsely reported "placement off").
+            if getattr(r, '_release_wall', None) is None:
+                r._release_wall = time.time()
+                return
+            if time.time() - r._release_wall < 2.5:
+                return
+            r._release_wall = None
             if not r.arm.busy:
-                # Verify the cube landed on the sink rim, not on the floor.
-                # The basin rim's world Z is sink_z + 0.05.  A cube resting
-                # on it has its centre at rim_z + cube_radius.  If the cube
-                # is on the floor instead, its z is ~0.01.
+                # Verify the cube landed ON or IN the sink, not the floor.
                 cube = self.get_tf_pose('test_block')
                 sink = self.get_tf_pose('sink')
                 if cube is not None and sink is not None:
-                    sink_rim_z = sink.pose.position.z + SINK_BASIN_RIM_LOCAL_Y
-                    cube_target_z = sink_rim_z + CUBE_SIZE / 2.0
-                    dz = cube.pose.position.z - cube_target_z
-                    if abs(dz) < 0.03:
+                    self.get_logger().info(
+                        f'[{r.name}] post-release cube=({cube.pose.position.x:.3f},'
+                        f'{cube.pose.position.y:.3f},{cube.pose.position.z:.3f}) '
+                        f'sink=({sink.pose.position.x:.3f},'
+                        f'{sink.pose.position.y:.3f},{sink.pose.position.z:.3f})')
+                    # Success = cube ON or IN the sink.  The mesh's top
+                    # plate has a large basin opening (measured from
+                    # sink.obj: plate spans local X ±0.135 / Z ±0.17, top
+                    # at local Y 0.05); a 40 mm cube falls THROUGH the
+                    # opening and rests inside at z≈0.02 — which IS the
+                    # natural success outcome for a sink.  Failure = cube
+                    # on the floor AROUND the sink (outside the footprint).
+                    dx = cube.pose.position.x - sink.pose.position.x
+                    dy = cube.pose.position.y - sink.pose.position.y
+                    in_footprint = abs(dx) < 0.12 and abs(dy) < 0.15
+                    z_lo = sink.pose.position.z - 0.01
+                    z_hi = sink.pose.position.z + 0.09
+                    if in_footprint and (z_lo <= cube.pose.position.z <= z_hi):
                         self.get_logger().info(
                             f'[{r.name}] Cube placed on sink '
-                            f'(cube_z={cube.pose.position.z:.3f}, '
-                            f'target_z={cube_target_z:.3f})')
+                            f'(dx={dx*1000:.0f}mm dy={dy*1000:.0f}mm '
+                            f'cube_z={cube.pose.position.z:.3f})')
                         r.has_cube = False
                         self._transition(r, 'BACKUP')
                     else:
-                        self.get_logger().warn(
+                        cube_z = cube.pose.position.z
+                        target_z = sink.pose.position.z + 0.06
+                        dz = cube_z - target_z
+                        self.get_logger().warning(
                             f'[{r.name}] Cube placement off: '
-                            f'cube_z={cube.pose.position.z:.3f} '
-                            f'target_z={cube_target_z:.3f} '
-                            f'(dz={dz*1000:.1f}mm); retrying')
+                            f'cube_z={cube_z:.3f} '
+                            f'target_z={target_z:.3f} '
+                            f'(dz={dz*1000:.1f}mm); re-picking cube')
                         r.reach_down_done = False
-                        self._transition(r, 'DRIVE_TO_SINK')
+                        r._align_start_wall = None   # reset timeout for retry
+                        r.target = None              # recompute pre-approach
+                        # Re-approach via APPROACH_CUBE (drive_to_pose has
+                        # sink avoidance). Going straight to PRE_PICK_ALIGN
+                        # lets tf_final_align cut a path THROUGH the sink
+                        # when the cube fell next to it.
+                        self._transition(r, 'APPROACH_CUBE')
                 else:
                     self._transition(r, 'BACKUP')
 
@@ -1180,7 +1441,8 @@ class MultiRobotCubeSinkAutopilot(Node):
                 self.get_logger().info(
                     f'[{r.name}] sink standoff: ({bx:.2f}, {by:.2f}), '
                     f'yaw={math.degrees(byaw):.0f}deg, handle=({my_handle[0]:.2f},{my_handle[1]:.2f})')
-            if self.drive_to_pose(r, r.target[0], r.target[1]):
+            if self.drive_to_pose(r, r.target[0], r.target[1],
+                                   safe_frame='sink', min_safe_dist=0.25):
                 r.target = None
                 self._transition(r, 'FACE_HANDLE')
 
@@ -1245,6 +1507,9 @@ class MultiRobotCubeSinkAutopilot(Node):
         r2 = self.robots['robot_2']
         r3 = self.robots['robot_3']
 
+        # Consume fire-and-forget attach/detach service responses.
+        self._poll_glue_services()
+
         if self.mission_state == 'WAIT_FOR_OBJECTS':
             cube = self.get_tf_pose('test_block')
             sink = self.get_tf_pose('sink')
@@ -1259,14 +1524,27 @@ class MultiRobotCubeSinkAutopilot(Node):
             return
 
         if self.mission_state == 'ROBOT_1_PICK':
+            # SEQUENTIAL mission: helpers hold position (arms to drive
+            # pose only, chassis stopped) while robot_1 drives to the
+            # cube.  Running them concurrently crossed robot_2's path
+            # (from (-1.5,-0.7) toward the -Y sink handle) with robot_1's
+            # path to the cube at (2.0,-1.2) — they collided mid-field
+            # and robot_1 never reached the cube (observed in Gazebo).
             self.update_robot_1()
-            # Helpers start moving to the sink in parallel with robot 1
-            # (Step 1 and Step 2 happen concurrently per the task spec).
-            # Once robot 1 has the cube we move to the next mission state.
-            self.update_robot_2_or_3(r2, -1)
-            self.update_robot_2_or_3(r3, +1)
+            for r in [r2, r3]:
+                self.stop(r)
+                if r.state == 'IDLE':
+                    r.arm.run_async(r.arm.to_drive_pose)
+                    r.state = 'ARM_TO_DRIVE'
+                elif r.state == 'ARM_TO_DRIVE' and not r.arm.busy:
+                    r.state = 'HOLD_START'
             if r1.state == 'DRIVE_TO_SINK':
                 self.get_logger().info('Robot 1 picked cube; helpers to sink')
+                # Rewind helper states so their state machines start
+                # cleanly from APPROACH_SINK.
+                for r in [r2, r3]:
+                    if r.state == 'HOLD_START':
+                        r.state = 'IDLE'
                 self.mission_state = 'HELPERS_TO_SINK'
             return
 

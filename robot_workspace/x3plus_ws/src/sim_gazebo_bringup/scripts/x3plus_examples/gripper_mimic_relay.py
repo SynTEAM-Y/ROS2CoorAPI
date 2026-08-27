@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-Gripper Mimic Joint Bridge
+Gripper Mimic Joint Bridge for Gazebo Sim 10 (Ionic) + ROS 2 Lyrical.
 
-Ignition Gazebo Fortress does NOT enforce URDF <mimic>. This node bridges the
-gap two ways:
+Gazebo Sim 10 does NOT enforce URDF <mimic>. This node bridges the gap
+two ways:
 
 1. /joint_states_raw  ->  /joint_states
-   Strips the 5 mimic finger joints (llink_joint1-3, rlink_joint2-3) from the
-   raw Ignition joint_states so robot_state_publisher computes them from
+   Strips the 5 mimic finger joints (llink_joint1-3, rlink_joint2-3) from
+   the raw Gazebo joint_states so robot_state_publisher computes them from
    grip_joint via the URDF <mimic> tag. This makes the gripper move correctly
    in RViz / TF.
 
@@ -15,7 +15,7 @@ gap two ways:
    Fans out the gripper command to a JointPositionController on each mimic
    joint (multiplier baked in) so the fingers also physically open/close in
    Gazebo, not just visually in RViz. Without this the URDF <mimic> tag is
-   ignored by Ignition physics and the fingers stay frozen in Gazebo.
+   ignored by Gazebo physics and the fingers stay frozen.
 
 Mimic multipliers (from URDF):
   llink_joint1  = grip_joint x -1
@@ -39,17 +39,12 @@ from std_msgs.msg import Float64
 #   l_joint2:  mimic=+1  (l link2 =  grip_joint)  [left pad counter-rotates]
 #   l_joint3:  mimic=-1  (l link3 = -grip_joint)  [left rocker mirrors]
 #   r_joint3:  mimic=+1  (r link3 =  grip_joint)  [right rocker parallel to crank]
-# These multipliers maintain the parallelogram 4-bar constraint:
-#   - input cranks: r link1 (master) and l link1 (mirror, mimic=-1)
-#   - output bars/pads: r link2 and l link2 (mimic=∓1) rotate OPPOSITE to
-#     their parent crank so net orientation in arm_link5 is constant → parallel pads
-#   - rockers: r link3 (mimic=+1) and l link3 (mimic=-1) parallel to the cranks
 MIMIC_MULTIPLIERS = {
-    'llink_joint1': -1.0,  # left crank mirrors right (mimic=-1)
-    'llink_joint2': +1.0,  # left pad (mimic=+1, opens left — mirror of right)
-    'llink_joint3': -1.0,  # left rocker mirrors (mimic=-1)
-    'rlink_joint2': -1.0,  # right pad (mimic=-1, counter-rotates to stay parallel)
-    'rlink_joint3': +1.0,  # right rocker parallel to crank (mimic=+1)
+    'llink_joint1': -1.0,
+    'llink_joint2': +1.0,
+    'llink_joint3': -1.0,
+    'rlink_joint2': -1.0,
+    'rlink_joint3': +1.0,
 }
 
 
@@ -97,18 +92,12 @@ class GripperMimicRelay(Node):
         # "buzz" in the wrist camera as the reference creeps into the
         # controller's dead zone.
         #
-        # Init at GRIPPER_OPEN (-1.54) — NOT 0 — so the relay's first
-        # published command matches the URDF <initial_position> (grip_joint
-        # spawns OPEN).  Initialising at 0 (closed) yanked the gripper shut
-        # Home position is CLOSED (grip_joint = 0).  Pads start together
-        # so the gripper is ready to receive a cube immediately.
-        # Initialising at -1.54 (OPEN) would yank the gripper open the
-        # instant the relay came up, fighting the spawn pose and jolting
-        # the freshly-spawned fingers.
+        # Init at 0.0 (CLOSED) — matches the manufacturer's URDF spawn pose.
+        # The gripper starts with pads together, ready to receive a cube.
         self._target = 0.0       # latest user setpoint (CLOSED at startup)
         self._current = 0.0      # currently published (ramped) setpoint
-        self._rate = 5.0        # rad/s ramp speed (~0.3 s for full open)
-        self._dt = 0.02         # 50 Hz publish
+        self._rate = 5.0         # rad/s ramp speed (~0.3 s for full open)
+        self._dt = 0.02          # 50 Hz publish
         self._timer = self.create_timer(self._dt, self._tick)
 
         self.get_logger().info(

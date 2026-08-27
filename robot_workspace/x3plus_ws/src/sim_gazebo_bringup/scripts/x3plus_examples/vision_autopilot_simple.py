@@ -461,7 +461,7 @@ class VisionAutopilotSimple(Node):
         arm5 = self.get_tf_pose('arm_link5')
         robot = self.get_tf_pose('base_footprint')
         if not cube or not arm5 or not robot:
-            self.get_logger().warn('TF align: missing TF data, skipping')
+            self.get_logger().warning('TF align: missing TF data, skipping')
             return True
 
         err_x = cube.pose.position.x - arm5.pose.position.x
@@ -567,7 +567,7 @@ class VisionAutopilotSimple(Node):
             if math.sqrt(dx * dx + dy * dy) < \
                     self.get_parameter('standoff_distance').value - 0.03:
                 self.stop()
-                self.get_logger().warn('HSV approach: GPS floor hit, stopping')
+                self.get_logger().warning('HSV approach: GPS floor hit, stopping')
                 return True
 
         if not self.color_detector.detected:
@@ -623,7 +623,7 @@ class VisionAutopilotSimple(Node):
             else:
                 self.idle_tf_timeout += 1
                 if self.idle_tf_timeout % 50 == 0:  # Log every 5 seconds (50 * 0.1s)
-                    self.get_logger().warn(f'[IDLE] Waiting for cube TF... (timeout count: {self.idle_tf_timeout}). Check if gazebo_pose_tf_relay nodes are running!')
+                    self.get_logger().warning(f'[IDLE] Waiting for cube TF... (timeout count: {self.idle_tf_timeout}). Check if gazebo_pose_tf_relay nodes are running!')
 
         elif self.state == 'ARM_TO_DRIVE':
             if not self.arm_controller.busy:
@@ -632,7 +632,7 @@ class VisionAutopilotSimple(Node):
 
         elif self.state == 'APPROACH_CUBE':
             if not self.cube_pose:
-                self.get_logger().warn('[APPROACH_CUBE] Lost cube pose, returning to IDLE')
+                self.get_logger().warning('[APPROACH_CUBE] Lost cube pose, returning to IDLE')
                 self.state = 'IDLE'
                 return
 
@@ -716,7 +716,7 @@ class VisionAutopilotSimple(Node):
                     f'[FIND_LANDING] Landing pad located at ({landing_pose.pose.position.x:.2f}, {landing_pose.pose.position.y:.2f})')
                 self.state = 'DRIVE_TO_LANDING'
             else:
-                self.get_logger().warn('[FIND_LANDING] Waiting for landing pad TF...')
+                self.get_logger().warning('[FIND_LANDING] Waiting for landing pad TF...')
                 
         elif self.state == 'DRIVE_TO_LANDING':
             if not self.landing_pose:

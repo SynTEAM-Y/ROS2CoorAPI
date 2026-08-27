@@ -39,32 +39,22 @@
     </plugin>
 
       <physics name="default_physics" type="ode">
-        <!-- Run physics with stable 5 ms steps (200 Hz update rate).
-             Using a coarse 20 ms step size at 50 Hz causes numerical instability,
-             violent joint vibrations (shaking), and poor constraint solving.
-             A 5 ms step size provides highly stable physics and smooth movements,
-             while allowing the simulator to run at a lower, CPU-friendly
-             Real-Time Factor (RTF) stably under use_sim_time. -->
         <max_step_size>0.005</max_step_size>
         <real_time_update_rate>200</real_time_update_rate>
-      <gravity>0 0 -9.8</gravity>
-      <ode>
-        <solver>
-          <type>quick</type>
-          <iters>50</iters>
-          <precon_iters>0</precon_iters>
-          <precon_tolerance>0</precon_tolerance>
-          <max_vel>100</max_vel>
-          <surface_layer>0.001</surface_layer>
-        </solver>
-        <constraints>
-          <cfm>1e-5</cfm>
-          <erp>0.2</erp>
-          <contact_max_correcting_vel>100</contact_max_correcting_vel>
-          <contact_surface_layer>0.001</contact_surface_layer>
-        </constraints>
-      </ode>
-    </physics>
+        <gravity>0 0 -9.8</gravity>
+        <ode>
+          <solver>
+            <type>quick</type>
+            <iters>50</iters>
+          </solver>
+          <constraints>
+            <cfm>1e-5</cfm>
+            <erp>0.2</erp>
+            <contact_max_correcting_vel>100</contact_max_correcting_vel>
+            <contact_surface_layer>0.001</contact_surface_layer>
+          </constraints>
+        </ode>
+      </physics>
 
     <!-- Ground plane -->
     <model name="ground_plane">
@@ -162,17 +152,36 @@
          and the green landing pad (+Y side).  The sink is rolled pi/2 so its
          local Z axis points along world Y; the two red handles therefore
          protrude in the world +/-Y directions. -->
-      <!-- The 4 cm cube sits directly on the FLOOR (no platform).  The
-           cube centre is at z=0.02 m (half cube height).  The pads grip
-           the cube on the sides at z=0.02 m.  This eliminates the
-           "cube falls off the platform" issue when the gripper bumps
-           the cube during approach. -->
+<!-- Narrow visible support under the cube: 2 cm radius cylinder,
+           4 cm tall, grey.  Keeps the cube at z=0.06 (where the
+           arm's REACH_DOWN can put pads at the cube centre for a real
+           side-grasp) while not blocking the robot wheels (track
+           width 21 cm, wheel radius 4 cm — wheels straddle easily).
+           Replaces the wide grey "cube_platform" the user found
+           visually distracting. -->
+      <model name="cube_post">
+        <static>true</static>
+        <pose>2.0 -1.2 0.02 0 0 0</pose>
+        <link name="link">
+          <collision name="collision">
+            <geometry><cylinder><radius>0.02</radius><length>0.04</length></cylinder></geometry>
+          </collision>
+          <visual name="visual">
+            <geometry><cylinder><radius>0.02</radius><length>0.04</length></cylinder></geometry>
+            <material>
+              <ambient>0.3 0.3 0.3 1</ambient>
+              <diffuse>0.4 0.4 0.4 1</diffuse>
+            </material>
+          </visual>
+        </link>
+      </model>
       <include>
        <uri>model://sim_gazebo_bringup/models/test_block</uri>
        <name>test_block</name>
-       <!-- Spawn directly on the floor (z=0.02 m = half-cube height).
-            No fall, no platform to knock the cube off. -->
-       <pose>2.0 -1.2 0.02 0 0 0</pose>
+       <!-- Cube centre at z=0.06 (post top 0.04 + half cube 0.02).
+            REACH_DOWN puts pads at z~0.066 — inside the cube's
+            vertical extent for a real side-grasp. -->
+       <pose>2.0 -1.2 0.06 0 0 0</pose>
      </include>
     <include>
       <uri>model://sim_gazebo_bringup/models/sink</uri>

@@ -108,7 +108,7 @@ class ObjectDetector(Node):
         try:
             self._latest_depth = self._bridge.imgmsg_to_cv2(msg, '32FC1')
         except Exception as e:
-            self.get_logger().warn(f'Depth conversion failed: {e}')
+            self.get_logger().warning(f'Depth conversion failed: {e}')
 
     def _hsv_params(self):
         if not CV_AVAILABLE:
@@ -121,7 +121,7 @@ class ObjectDetector(Node):
         try:
             cv_img = self._bridge.imgmsg_to_cv2(msg, 'bgr8')
         except Exception as e:
-            self.get_logger().warn(f'cv_bridge failed: {e}')
+            self.get_logger().warning(f'cv_bridge failed: {e}')
             return
 
         lower, upper = self._hsv_params()
@@ -195,7 +195,7 @@ class ObjectDetector(Node):
             out.header = msg.header
             self._pub_img.publish(out)
         except Exception as e:
-            self.get_logger().warn(f'cv2_to_imgmsg failed: {e}')
+            self.get_logger().warning(f'cv2_to_imgmsg failed: {e}')
 
         if self._calibrate_mode and self._camera_info is not None:
             self._show_calibrator(cv_img, mask)

@@ -104,12 +104,11 @@
                  than the per-joint PID's max torque (1 N.m) could overcome on
                  tiny 1-gram finger links, so 4 of 5 mimic joints stayed frozen
                  while only rlink_joint2 (under load asymmetry) overshot. -->
-            <dynamics damping="0.05" friction="0.005"/>
+             <dynamics damping="0.05" friction="0.005"/>
             <!-- <mimic> tag: required by robot_state_publisher to compute finger
-                 link TF positions from the master grip_joint. Ignition Fortress
-                 ignores <mimic> for physics (handled by JointPositionController
-                 plugins + gripper_mimic_relay), but RSP needs it to publish
-                 rlink2/llink2 frames in the TF tree. -->
+                 link TF positions from the master grip_joint. Gazebo Sim ignores
+                 <mimic> for physics (handled by JointPositionController plugins
+                 + gripper_mimic_relay), but RSP needs it for TF. -->
             <mimic joint="grip_joint" multiplier="${mimic}" offset="0"/>
         </joint>
     </xacro:macro>
@@ -458,15 +457,10 @@
     <xacro:continuous_joint name="rlink_joint2" parent="rlink1" child="rlink2" xyz="0.03 -0.00075429 0" rpy="0 0 0" mimic="-1"/>
 
     <!-- rlink3 / rlink_joint3: RIGHT 4-bar ROCKER.
-         Parented to arm_link5 and driven by mimic=+1 so it rotates by
-         the same angle as the input crank rlink1.  Together with the
+         Parented to arm_link5 and driven by mimic=-1 so it rotates in the
+         SAME direction as the input crank rlink1.  Together with the
          rlink_joint2 mimic this forms the parallelogram four-bar that
-         keeps the pad parallel through the whole grip range.
-
-         The rocker is pinned at arm_link5 (C, this joint origin) and
-         its free end tracks the pad's middle hole via the mimic
-         relationship.  Positions match the original yahboomcar
-         URDF which works correctly in RViz. -->
+         keeps the pad parallel through the whole grip range. -->
     <xacro:common_link_no_collision name="rlink3" material="Green" path="X3plus">
         <inertial>
             <origin xyz="0.014355 1.1499E-05 -0.0033992" rpy="0 0 0"/>
@@ -475,7 +469,7 @@
         </inertial>
     </xacro:common_link_no_collision>
     <xacro:continuous_joint name="rlink_joint3" parent="arm_link5" child="rlink3" xyz="-0.0035 -0.0045 -0.0505"
-                      rpy="0 -${pi/2} 0" mimic="1"/>
+                      rpy="0 -${pi/2} 0" mimic="-1"/>
     <xacro:common_link_no_collision name="llink1" material="Green" path="X3plus">
         <inertial>
             <origin xyz="0.00628617364795481 -0.000318530407893543 0.00100000338924466" rpy="0 0 0"/>
@@ -493,7 +487,7 @@
         </inertial>
     </xacro:common_link>
     <xacro:continuous_joint name="llink_joint2" parent="llink1" child="llink2" xyz="0.03 0.00065104 0" rpy="0 0 0"
-                      mimic="1"/>
+                      mimic="-1"/>
 
     <!-- llink3 / llink_joint3: LEFT 4-bar ROCKER, mirror of the right side.
          Mirror of the right rocker with Y axis flipped.  mimic=-1 so the
@@ -609,69 +603,54 @@
                  gripper is ready to receive a cube. -->
             <initial_position>0</initial_position>
         </plugin>
-        <!-- ==================== MIMIC GRIPPER FINGER CONTROLLERS ====================
-              Ignition Fortress does NOT enforce URDF <mimic>. To make the fingers
-              actually open/close in Gazebo (not just visually in RViz/RSP), we
-              attach a low-gain JointPositionController to each of the 3 mimic
-              joints (rlink_joint2, llink_joint1, llink_joint2). The
-              gripper_mimic_relay node fans out /grip_joint_cmd_pos to each
-              /<mimic>_cmd_pos topic with the URDF multiplier baked in.
-              Finger inertias are bumped to 1e-5 (above) and gravity is disabled
-              on the finger links (below) so these tiny PID loops stay stable. -->
-        <!-- MIMIC GRIPPER FINGER CONTROLLERS (5 mimic joints).
-             rlink_joint3 and llink_joint3 are the 4-bar COUPLERS (rockers).
-             All five share the same low-gain PID: p_gain=10, i_gain=0.0 (any
-             integral winds up against the joint limit and freezes/splays the
-             finger), d_gain=0.3.  The couplers keep the pads parallel and make
-             the four-bar visually complete. -->
+        <!-- MIMIC GRIPPER FINGER CONTROLLERS (5 mimic joints, min-gain).
+             Low gains (P=2.0, cmd_max=1.0 N.m) — enough to move the 1g
+             finger links without creating a PID bidding war against
+             grip_joint (P=50, cmd_max=2.5).  The relay's 10 rad/s ramp
+             rate ensures the reference never jumps. -->
         <plugin filename="ignition-gazebo-joint-position-controller-system"
                 name="ignition::gazebo::systems::JointPositionController">
             <joint_name>llink_joint1</joint_name>
             <topic>/llink_joint1_cmd_pos</topic>
-            <p_gain>50.0</p_gain> <i_gain>0.0</i_gain>  <d_gain>2.0</d_gain>
-            <i_max>0.2</i_max> <i_min>-0.2</i_min>
-            <cmd_max>2.5</cmd_max> <cmd_min>-2.5</cmd_min>
-            <!-- mimic=-1: at master=-1.54 the mimic should be at +1.54.
-                 Setting initial to the correct mimic value avoids the
-                 sim-start jump that visibly "detaches" the pad. -->
+            <p_gain>2.0</p_gain> <i_gain>0.0</i_gain>  <d_gain>0.2</d_gain>
+            <i_max>0.1</i_max> <i_min>-0.1</i_min>
+            <cmd_max>1.0</cmd_max> <cmd_min>-1.0</cmd_min>
             <initial_position>0</initial_position>
         </plugin>
         <plugin filename="ignition-gazebo-joint-position-controller-system"
                 name="ignition::gazebo::systems::JointPositionController">
             <joint_name>llink_joint2</joint_name>
             <topic>/llink_joint2_cmd_pos</topic>
-            <p_gain>50.0</p_gain> <i_gain>0.0</i_gain>  <d_gain>2.0</d_gain>
-            <i_max>0.2</i_max> <i_min>-0.2</i_min>
-            <cmd_max>2.5</cmd_max> <cmd_min>-2.5</cmd_min>
+            <p_gain>2.0</p_gain> <i_gain>0.0</i_gain>  <d_gain>0.2</d_gain>
+            <i_max>0.1</i_max> <i_min>-0.1</i_min>
+            <cmd_max>1.0</cmd_max> <cmd_min>-1.0</cmd_min>
             <initial_position>0</initial_position>
         </plugin>
         <plugin filename="ignition-gazebo-joint-position-controller-system"
                 name="ignition::gazebo::systems::JointPositionController">
             <joint_name>llink_joint3</joint_name>
             <topic>/llink_joint3_cmd_pos</topic>
-            <p_gain>50.0</p_gain> <i_gain>0.0</i_gain>  <d_gain>2.0</d_gain>
-            <i_max>0.2</i_max> <i_min>-0.2</i_min>
-            <cmd_max>2.5</cmd_max> <cmd_min>-2.5</cmd_min>
-            <!-- mimic=-1: at master=-1.54 the mimic should be at +1.54. -->
+            <p_gain>2.0</p_gain> <i_gain>0.0</i_gain>  <d_gain>0.2</d_gain>
+            <i_max>0.1</i_max> <i_min>-0.1</i_min>
+            <cmd_max>1.0</cmd_max> <cmd_min>-1.0</cmd_min>
             <initial_position>0</initial_position>
         </plugin>
         <plugin filename="ignition-gazebo-joint-position-controller-system"
                 name="ignition::gazebo::systems::JointPositionController">
             <joint_name>rlink_joint2</joint_name>
             <topic>/rlink_joint2_cmd_pos</topic>
-            <p_gain>50.0</p_gain> <i_gain>0.0</i_gain>  <d_gain>2.0</d_gain>
-            <i_max>0.2</i_max> <i_min>-0.2</i_min>
-            <cmd_max>2.5</cmd_max> <cmd_min>-2.5</cmd_min>
-            <!-- mimic=-1: at master=-1.54 the mimic should be at +1.54. -->
+            <p_gain>2.0</p_gain> <i_gain>0.0</i_gain>  <d_gain>0.2</d_gain>
+            <i_max>0.1</i_max> <i_min>-0.1</i_min>
+            <cmd_max>1.0</cmd_max> <cmd_min>-1.0</cmd_min>
             <initial_position>0</initial_position>
         </plugin>
         <plugin filename="ignition-gazebo-joint-position-controller-system"
                 name="ignition::gazebo::systems::JointPositionController">
             <joint_name>rlink_joint3</joint_name>
             <topic>/rlink_joint3_cmd_pos</topic>
-            <p_gain>50.0</p_gain> <i_gain>0.0</i_gain>  <d_gain>2.0</d_gain>
-            <i_max>0.2</i_max> <i_min>-0.2</i_min>
-            <cmd_max>2.5</cmd_max> <cmd_min>-2.5</cmd_min>
+            <p_gain>2.0</p_gain> <i_gain>0.0</i_gain>  <d_gain>0.2</d_gain>
+            <i_max>0.1</i_max> <i_min>-0.1</i_min>
+            <cmd_max>1.0</cmd_max> <cmd_min>-1.0</cmd_min>
             <initial_position>0</initial_position>
         </plugin>
         <!-- ==================== IGNITION DIFFERENTIAL DRIVE ==================== -->

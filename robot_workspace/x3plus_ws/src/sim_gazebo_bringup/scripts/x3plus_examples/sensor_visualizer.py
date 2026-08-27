@@ -73,7 +73,7 @@ class SensorVisualizer(Node):
         except cv2.error:
             pass
         except Exception as e:
-            self.get_logger().warn(f'Mono display error: {e}')
+            self.get_logger().warning(f'Mono display error: {e}')
 
     def _on_depth(self, msg: Image) -> None:
         try:
@@ -99,7 +99,7 @@ class SensorVisualizer(Node):
             # Headless / no display available – silently ignore
             pass
         except Exception as e:
-            self.get_logger().warn(f'Depth display error: {e}')
+            self.get_logger().warning(f'Depth display error: {e}')
 
     def _on_lidar(self, msg: LaserScan) -> None:
         valid = [r for r in msg.ranges if msg.range_min < r < msg.range_max]

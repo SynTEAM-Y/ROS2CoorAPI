@@ -21,7 +21,7 @@
     shape as closely as possible.
   -->
   <model name="sink">
-    <static>false</static>
+    <static>true</static>
     <pose>0 0 0.035 0 0 0</pose>
 
     <!-- Ground-truth pose publisher: relayed to /tf as odom->sink. -->

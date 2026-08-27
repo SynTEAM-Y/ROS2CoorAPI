@@ -57,11 +57,18 @@ class GazeboPoseTfRelay(Node):
         input_topic = self.get_parameter('input_topic').value
         input_type = self.get_parameter('input_type').value
 
-        # /tf publisher: best-effort, volatile (matches tf2_ros default).
-        self.tf_pub = self.create_publisher(TFMessage, '/tf', 100)
+        # /tf publisher: RELIABLE + TRANSIENT_LOCAL so tf2 buffers
+        # (which subscribe with TRANSIENT_LOCAL by default) actually
+        # receive and keep our transforms.
+        pub_qos = QoSProfile(depth=100)
+        pub_qos.reliability = QoSReliabilityPolicy.RELIABLE
+        pub_qos.durability = QoSDurabilityPolicy.TRANSIENT_LOCAL
+        self.tf_pub = self.create_publisher(TFMessage, '/tf', pub_qos)
 
         # Use reliable QoS for the input topic so the relay does not miss
-        # messages if it starts after the bridge.
+        # messages if it starts after the bridge. Match the bridge's VOLATILE
+        # durability (ros_gz_bridge publishes Pose_V with default RELIABLE+
+        # VOLATILE).
         qos = QoSProfile(depth=100)
         qos.reliability = QoSReliabilityPolicy.RELIABLE
         qos.durability = QoSDurabilityPolicy.VOLATILE
@@ -95,7 +102,7 @@ class GazeboPoseTfRelay(Node):
         """
         Check whether child_frame_id identifies the source model.
         Ignition may emit bare model names, scoped names (model/link), or
-        nested names (model::link), so we accept any of those forms.
+        nested names (model::link).
         """
         if not child_frame_id:
             return False
@@ -113,10 +120,13 @@ class GazeboPoseTfRelay(Node):
 
     def _publish(self, stamp, translation, rotation) -> None:
         out = TransformStamped()
-        # The Ignition world-pose topic often arrives with header.stamp = 0.
-        # robot_state_publisher and TF lookups use sim time, so stamp the
-        # relayed transform with the current node clock instead.
-        out.header.stamp = self.get_clock().now().to_msg()
+        if stamp is not None and stamp.sec > 0:
+            now = stamp
+        else:
+            now = self.get_clock().now().to_msg()
+            if now.sec == 0 and now.nanosec == 0:
+                now = rclpy.clock.Clock().now().to_msg()
+        out.header.stamp = now
         out.header.frame_id = self.parent_frame
         out.child_frame_id = self.child_frame
         out.transform.translation.x = translation.x
@@ -128,36 +138,26 @@ class GazeboPoseTfRelay(Node):
         out.transform.rotation.w = rotation.w
         self._last_transform = out
         self.tf_pub.publish(TFMessage(transforms=[out]))
-        self._once.log(
-            'published_first',
-            f"[{self.child_frame}] published {self.parent_frame} -> {self.child_frame} "
-            f"@ t={out.header.stamp.sec}.{out.header.stamp.nanosec:09d} "
-            f"p=({out.transform.translation.x:.3f}, {out.transform.translation.y:.3f}, "
-            f"{out.transform.translation.z:.3f})")
 
     def _republish_last(self) -> None:
         if self._last_transform is not None:
-            self._last_transform.header.stamp = self.get_clock().now().to_msg()
-            self.tf_pub.publish(TFMessage(transforms=[self._last_transform]))
+            now = self.get_clock().now().to_msg()
+            if now.sec > 0:
+                self._last_transform.header.stamp = now
+                self.tf_pub.publish(TFMessage(transforms=[self._last_transform]))
 
     def _on_tf(self, msg: TFMessage) -> None:
         try:
-            # The PosePublisher emits the model pose plus every link pose. We want
-            # the model root, identified by child_frame_id == source_child.
-            self._once.log('recv_first', f"[{self.child_frame}] first /gz_pose_tf received ({len(msg.transforms)} transforms)")
+            if not msg.transforms:
+                return
+            # Check if any transform matches source_child explicitly, or take transform 0 if dedicated
             for tr in msg.transforms:
                 if self._child_matches(tr.child_frame_id, self.source_child):
-                    self._once.log('match_first', f"[{self.child_frame}] matched source_child '{self.source_child}' "
-                                                   f"(child_frame_id='{tr.child_frame_id}'), publishing to /tf")
-                    self._publish(tr.header.stamp,
-                                  tr.transform.translation,
-                                  tr.transform.rotation)
+                    self._publish(tr.header.stamp, tr.transform.translation, tr.transform.rotation)
                     return
-            # Throttled debug to see which child_frame_ids are being ignored.
-            children = [t.child_frame_id for t in msg.transforms[:8]]
-            self._once.log('no_match_first',
-                           f"[{self.child_frame}] no source_child '{self.source_child}' in /gz_pose_tf "
-                           f"(children: {children})")
+            # Fallback for dedicated per-model pose streams where child_frame_id may be empty
+            tr = msg.transforms[0]
+            self._publish(tr.header.stamp, tr.transform.translation, tr.transform.rotation)
         except Exception as e:
             self.get_logger().error(f'Error processing TFMessage: {e}')
 

@@ -138,8 +138,8 @@ class GripperTester(Node):
             self.get_logger().info('')
             self.get_logger().info('  ✅ PARALLEL CONSTRAINT VERIFIED')
         else:
-            self.get_logger().warn('')
-            self.get_logger().warn('  ⚠️  WARNING: Links not parallel!')
+            self.get_logger().warning('')
+            self.get_logger().warning('  ⚠️  WARNING: Links not parallel!')
     
     def check_contacts(self):
         """Check if gripper fingers are in contact with anything"""
@@ -164,7 +164,7 @@ class GripperTester(Node):
         elif llink_contact and rlink_contact:
             self.get_logger().info('  ✅ Both fingers in contact (good grip!)')
         else:
-            self.get_logger().warn('  ⚠️  Only one finger in contact (unbalanced grip)')
+            self.get_logger().warning('  ⚠️  Only one finger in contact (unbalanced grip)')
     
     def run_tests(self):
         """Run through all test positions"""

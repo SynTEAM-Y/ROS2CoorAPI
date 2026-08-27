@@ -78,25 +78,19 @@ ROBOTS = [
 
 # Objects included in the world SDF.
 #
-# Dynamic objects stream their poses from Gazebo via PosePublisher +
-# ros_gz_bridge + gazebo_pose_tf_relay.  The cube and sink are picked up
-# by the world dynamic_pose/info stream and the per-model pose bridge.
+# Dynamic objects (cube + sink, `<static>false</static>` in their model SDF)
+# stream their poses from Gazebo's scene broadcaster via the world
+# dynamic_pose/info stream (bridged to /gz_pose_tf) and are republished as
+# dynamic `odom -> <model>` transforms by gazebo_pose_tf_relay so the
+# autopilot observes the cube actually moving (e.g. being lifted).
 #
 # Static objects (`<static>true</static>` in the model SDF) do not get a
-# usable pose topic from Gazebo when they are included in the world SDF
-# (the PosePublisher's `static_publisher` mode does not align with the
-# world pose stream's TF format), so their known pose is published with
-# `static_transform_publisher` on /tf_static.  Only the green landing pad
-# uses this approach; the sink (which is the drop target) is dynamic.
+# usable pose topic from Gazebo when they are included in the world SDF, so
+# their known pose is published with `static_transform_publisher` on
+# /tf_static.  Only the green landing pad uses this approach.
 #
 # Note: there is no separate "yellow_object" model in this scene because,
 # per the task spec, the sink IS the yellow drop target.
-DYNAMIC_OBJECTS = {
-    'test_block':   {'x': 2.0, 'y': -1.2, 'z': 0.03,
-                     'model': 'test_block'},
-    'sink':         {'x': 2.0, 'y':  0.0, 'z': 0.035,
-                     'model': 'sink', 'R': 1.57079632679, 'P': 0.0, 'Y': 0.0},
-}
 STATIC_OBJECTS = {
     'landing_pad':  {'x': 2.0, 'y': 1.2, 'z': 0.001,
                      'model': 'landing_pad'},
@@ -193,7 +187,7 @@ def _make_namespaced_urdf(base_urdf, robot_name):
     # Robot name itself.
     urdf = urdf.replace(
         '<robot name="yahboomcar_X3plus">',
-        f'<robot name="{robot_name}_yahboomcar_X3plus">')
+        f'<robot name="{robot_name}">')
 
     # Gazebo plugin topics: arm/gripper position controllers.
     for j in ['arm_joint1', 'arm_joint2', 'arm_joint3', 'arm_joint4',
@@ -265,36 +259,34 @@ def _bridge_args(robot_name, world_name):
     w = world_name
     return [
         # Arm / gripper command topics (ROS -> GZ)
-        f'/{r}/arm_joint1_cmd_pos@std_msgs/msg/Float64]ignition.msgs.Double',
-        f'/{r}/arm_joint2_cmd_pos@std_msgs/msg/Float64]ignition.msgs.Double',
-        f'/{r}/arm_joint3_cmd_pos@std_msgs/msg/Float64]ignition.msgs.Double',
-        f'/{r}/arm_joint4_cmd_pos@std_msgs/msg/Float64]ignition.msgs.Double',
-        f'/{r}/arm_joint5_cmd_pos@std_msgs/msg/Float64]ignition.msgs.Double',
-        f'/{r}/grip_master_target@std_msgs/msg/Float64]ignition.msgs.Double',
-        f'/{r}/llink_joint1_cmd_pos@std_msgs/msg/Float64]ignition.msgs.Double',
-        f'/{r}/llink_joint2_cmd_pos@std_msgs/msg/Float64]ignition.msgs.Double',
-        f'/{r}/llink_joint3_cmd_pos@std_msgs/msg/Float64]ignition.msgs.Double',
-        f'/{r}/rlink_joint2_cmd_pos@std_msgs/msg/Float64]ignition.msgs.Double',
-        f'/{r}/rlink_joint3_cmd_pos@std_msgs/msg/Float64]ignition.msgs.Double',
+        f'/{r}/arm_joint1_cmd_pos@std_msgs/msg/Float64]gz.msgs.Double',
+        f'/{r}/arm_joint2_cmd_pos@std_msgs/msg/Float64]gz.msgs.Double',
+        f'/{r}/arm_joint3_cmd_pos@std_msgs/msg/Float64]gz.msgs.Double',
+        f'/{r}/arm_joint4_cmd_pos@std_msgs/msg/Float64]gz.msgs.Double',
+        f'/{r}/arm_joint5_cmd_pos@std_msgs/msg/Float64]gz.msgs.Double',
+        f'/{r}/grip_master_target@std_msgs/msg/Float64]gz.msgs.Double',
+        f'/{r}/llink_joint1_cmd_pos@std_msgs/msg/Float64]gz.msgs.Double',
+        f'/{r}/llink_joint2_cmd_pos@std_msgs/msg/Float64]gz.msgs.Double',
+        f'/{r}/llink_joint3_cmd_pos@std_msgs/msg/Float64]gz.msgs.Double',
+        f'/{r}/rlink_joint2_cmd_pos@std_msgs/msg/Float64]gz.msgs.Double',
+        f'/{r}/rlink_joint3_cmd_pos@std_msgs/msg/Float64]gz.msgs.Double',
         # Differential drive
-        f'/model/{r}/cmd_vel@geometry_msgs/msg/Twist]ignition.msgs.Twist',
-        f'/model/{r}/odometry@nav_msgs/msg/Odometry[ignition.msgs.Odometry',
-        f'/model/{r}/imu@sensor_msgs/msg/Imu[ignition.msgs.IMU',
-        # Contact sensors (gz uses the world-relative sensor path; the
-        # <topic> element in the SDF is ignored by the contact sensor plugin,
-        # so the sensor publishes to the default path).
-        f'/world/{w}/model/{r}/link/{r}_llink2/sensor/llink2_contact/contact@ros_gz_interfaces/msg/Contacts[ignition.msgs.Contacts',
-        f'/world/{w}/model/{r}/link/{r}_rlink2/sensor/rlink2_contact/contact@ros_gz_interfaces/msg/Contacts[ignition.msgs.Contacts',
+        f'/model/{r}/cmd_vel@geometry_msgs/msg/Twist]gz.msgs.Twist',
+        f'/model/{r}/odometry@nav_msgs/msg/Odometry[gz.msgs.Odometry',
+        f'/model/{r}/imu@sensor_msgs/msg/Imu[gz.msgs.IMU',
+        # Contact sensors
+        f'/world/{w}/model/{r}/link/{r}_llink2/sensor/llink2_contact/contact@ros_gz_interfaces/msg/Contacts[gz.msgs.Contacts',
+        f'/world/{w}/model/{r}/link/{r}_rlink2/sensor/rlink2_contact/contact@ros_gz_interfaces/msg/Contacts[gz.msgs.Contacts',
         # Joint states
-        f'/world/{w}/model/{r}/joint_state@sensor_msgs/msg/JointState[ignition.msgs.Model',
+        f'/world/{w}/model/{r}/joint_state@sensor_msgs/msg/JointState[gz.msgs.Model',
         # Cameras
-        f'/{r}/depth_camera/image@sensor_msgs/msg/Image[ignition.msgs.Image',
-        f'/{r}/depth_camera/depth_image@sensor_msgs/msg/Image[ignition.msgs.Image',
-        f'/{r}/depth_camera/camera_info@sensor_msgs/msg/CameraInfo[ignition.msgs.CameraInfo',
-        f'/{r}/wrist_mono_camera/image@sensor_msgs/msg/Image[ignition.msgs.Image',
-        f'/{r}/wrist_mono_camera/camera_info@sensor_msgs/msg/CameraInfo[ignition.msgs.CameraInfo',
+        f'/{r}/depth_camera/image@sensor_msgs/msg/Image[gz.msgs.Image',
+        f'/{r}/depth_camera/depth_image@sensor_msgs/msg/Image[gz.msgs.Image',
+        f'/{r}/depth_camera/camera_info@sensor_msgs/msg/CameraInfo[gz.msgs.CameraInfo',
+        f'/{r}/wrist_mono_camera/image@sensor_msgs/msg/Image[gz.msgs.Image',
+        f'/{r}/wrist_mono_camera/camera_info@sensor_msgs/msg/CameraInfo[gz.msgs.CameraInfo',
         # Ground-truth model pose (for odom -> base_footprint TF relay).
-        f'/model/{r}/pose@tf2_msgs/msg/TFMessage[ignition.msgs.Pose_V',
+        f'/model/{r}/pose@tf2_msgs/msg/TFMessage[gz.msgs.Pose_V',
     ]
 
 
@@ -311,7 +303,6 @@ def _bridge_remaps(robot_name, world_name):
         (f'/{r}/depth_camera/camera_info', f'/{r}/mono_camera/camera_info'),
         (f'/{r}/wrist_mono_camera/image', f'/{r}/wrist_mono_camera/image_raw'),
         (f'/{r}/wrist_mono_camera/camera_info', f'/{r}/wrist_mono_camera/camera_info'),
-        (f'/model/{r}/pose', '/gz_pose_tf'),
     ]
 
 
@@ -364,13 +355,16 @@ def generate_launch_description():
     set_ign_res_path = SetEnvironmentVariable(
         'IGN_GAZEBO_RESOURCE_PATH',
         pkg_share_parent + ':' + os.environ.get('IGN_GAZEBO_RESOURCE_PATH', ''))
+    set_gz_res_path = SetEnvironmentVariable(
+        'GZ_SIM_RESOURCE_PATH',
+        pkg_share_parent + ':' + os.environ.get('GZ_SIM_RESOURCE_PATH', ''))
     set_gz_model_path = SetEnvironmentVariable(
         'GAZEBO_MODEL_PATH',
         pkg_share_parent + ':' + os.environ.get('GAZEBO_MODEL_PATH', ''))
 
     launch_entities = [
         use_rviz_arg, gui_arg,
-        set_ign_res_path, set_gz_model_path,
+        set_ign_res_path, set_gz_res_path, set_gz_model_path,
         gazebo_launch, gazebo_server_launch,
     ]
 
@@ -379,7 +373,7 @@ def generate_launch_description():
         package='tf2_ros',
         executable='static_transform_publisher',
         name='static_map_to_odom',
-        arguments=['0', '0', '0', '0', '0', '0', 'map', 'odom'],
+        arguments=['--x', '0', '--y', '0', '--z', '0', '--yaw', '0', '--pitch', '0', '--roll', '0', '--frame-id', 'map', '--child-frame-id', 'odom'],
         parameters=[{'use_sim_time': True}],
     ))
 
@@ -392,8 +386,9 @@ def generate_launch_description():
         name='world_bridge',
         output='screen',
         arguments=[
-            f'/world/{world_name}/dynamic_pose/info@tf2_msgs/msg/TFMessage[ignition.msgs.Pose_V',
-            '/clock@rosgraph_msgs/msg/Clock[ignition.msgs.Clock',
+            f'/world/{world_name}/dynamic_pose/info@tf2_msgs/msg/TFMessage[gz.msgs.Pose_V',
+            '/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock',
+            f'/world/{world_name}/set_pose@ros_gz_interfaces/srv/SetEntityPose',
         ],
         remappings=[(f'/world/{world_name}/dynamic_pose/info', '/gz_pose_tf')],
         parameters=[{'use_sim_time': True}],
@@ -485,8 +480,7 @@ def generate_launch_description():
         ))
 
         # Ground-truth pose relay: odom -> robot_base_footprint.
-        # The world dynamic-pose stream (/world/.../dynamic_pose/info) is
-        # bridged to /gz_pose_tf; the relay filters the model-name entry.
+        # Uses each robot's ground-truth pose from Gazebo PosePublisher.
         robot_actions.append(Node(
             package='sim_gazebo_bringup',
             executable='gazebo_pose_tf_relay',
@@ -496,7 +490,7 @@ def generate_launch_description():
                 {'use_sim_time': True},
                 {'parent_frame': 'odom'},
                 {'child_frame': f'{rname}_base_footprint'},
-                {'input_topic': '/gz_pose_tf'},
+                {'input_topic': f'/model/{rname}/pose'},
                 {'input_type': 'tf'},
                 {'source_child': rname},
             ],
@@ -504,22 +498,30 @@ def generate_launch_description():
 
     launch_entities.append(TimerAction(period=ROBOT_BRIDGE_DELAY_S, actions=robot_actions))
 
-    # Bridge ground-truth poses of the DYNAMIC objects (cube, sink) that are
-    # included in the world SDF into the shared /gz_pose_tf topic, and relay
-    # them as odom -> <object> TF frames.  Ignition's PosePublisher defaults to
-    # /model/<name>/pose (not /tf).
-    for obj_name, cfg in DYNAMIC_OBJECTS.items():
-        launch_entities.append(Node(
-            package='ros_gz_bridge',
-            executable='parameter_bridge',
-            name=f'{obj_name}_pose_bridge',
-            output='screen',
-            arguments=[
-                f'/model/{obj_name}/pose@tf2_msgs/msg/TFMessage[ignition.msgs.Pose_V',
-            ],
-            remappings=[(f'/model/{obj_name}/pose', '/gz_pose_tf')],
-            parameters=[{'use_sim_time': True}],
-        ))
+    # Dynamic transforms for the manipulable objects (cube + sink): relay the
+    # ground-truth pose as `odom -> <model>` on /tf so the autopilot sees the
+    # cube/sink actually move (e.g. the cube being lifted).
+    #
+    # Each object uses its DEDICATED PosePublisher stream
+    # (/model/<obj>/pose, gz.msgs.Pose_V) rather than the merged world
+    # dynamic_pose/info stream.  ros_gz_bridge's Pose_V -> TFMessage
+    # conversion leaves frame_id/child_frame_id EMPTY, so the relay's
+    # source_child matching cannot disambiguate entities in the merged
+    # stream — every relay fell back to transforms[0] (the cube), making
+    # the sink TF point at the cube.  A per-model stream carries exactly
+    # one pose, so the relay's transforms[0] fallback is always correct.
+    launch_entities.append(Node(
+        package='ros_gz_bridge',
+        executable='parameter_bridge',
+        name='object_pose_bridge',
+        output='screen',
+        arguments=[
+            f'/model/test_block/pose@tf2_msgs/msg/TFMessage[gz.msgs.Pose_V',
+            f'/model/sink/pose@tf2_msgs/msg/TFMessage[gz.msgs.Pose_V',
+        ],
+        parameters=[{'use_sim_time': True}],
+    ))
+    for obj_name in ['test_block', 'sink']:
         launch_entities.append(Node(
             package='sim_gazebo_bringup',
             executable='gazebo_pose_tf_relay',
@@ -529,7 +531,7 @@ def generate_launch_description():
                 {'use_sim_time': True},
                 {'parent_frame': 'odom'},
                 {'child_frame': obj_name},
-                {'input_topic': '/gz_pose_tf'},
+                {'input_topic': f'/model/{obj_name}/pose'},
                 {'input_type': 'tf'},
                 {'source_child': obj_name},
             ],
@@ -569,15 +571,15 @@ def generate_launch_description():
     # clock; without it the autopilot's wall-clock TF buffer cannot resolve
     # them.
     launch_entities.append(TimerAction(
-        period=30.0,
+        period=8.0,
         actions=[
-            # The attach/detach service: spawns a fixed joint between
-            # the gripper's rlink2 and the test_block cube when the
-            # gripper is at REACH_DOWN, removes the joint when the
-            # gripper opens at PLACE_DOWN. This sidesteps the broken
-            # gripper contact physics (rockers overlapping the pad mesh)
-            # by treating the gripper as a rigid "claw" that
-            # magically grips the cube.
+            # The attach/detach service: while attached it pose-glues the
+            # test_block cube to robot_1's gripper pad (rlink2) by re-setting
+            # the cube's world pose to the pad pose on every glue tick via
+            # /world/multi_robot_scene/set_pose.  This sidesteps the broken
+            # gripper contact physics by treating the gripper as a rigid
+            # "claw".  No cross-model joint is created because gz-sim cannot
+            # join two top-level models at runtime.
             Node(
                 package='sim_gazebo_bringup',
                 executable='cube_attach_detach',

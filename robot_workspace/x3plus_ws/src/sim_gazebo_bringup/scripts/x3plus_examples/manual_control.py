@@ -358,7 +358,7 @@ class DifferentialDriveControl(Node):
             time.sleep(0.01)
 
             if time.time() - loop_start > TIMEOUT_S:
-                self.get_logger().warn(
+                self.get_logger().warning(
                     f"90° turn timed out after {TIMEOUT_S}s — aborting. "
                     f"Check /odom rate; chassis may be stuck.")
                 break
@@ -392,7 +392,7 @@ class DifferentialDriveControl(Node):
 
             if (not warned_stuck) and (time.time() - loop_start > 1.0):
                 if abs(displacement) < math.radians(2.0):
-                    self.get_logger().warn(
+                    self.get_logger().warning(
                         'Yaw not moving 1 s into turn — source may be dead. '
                         'Will keep trying until timeout.')
                     warned_stuck = True
